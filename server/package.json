@@ -1,0 +1,16 @@
+{
+  "name": "music-app-react-lite-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch index.js",
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "lrclib-api": "^2.0.4",
+    "ytmusic-api": "^5.3.1"
+  }
+}
