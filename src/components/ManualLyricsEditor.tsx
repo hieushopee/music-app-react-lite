@@ -54,7 +54,6 @@ export function ManualLyricsEditor({
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkValue, setBulkValue] = useState('')
   const [editMode, setEditMode] = useState(false)
-  const [speedDirection, setSpeedDirection] = useState<'down' | 'up'>('down')
   const [customThumbnail, setCustomThumbnail] = useState('')
   const [resettingCover, setResettingCover] = useState(false)
   const [resettingLyrics, setResettingLyrics] = useState(false)
@@ -68,7 +67,6 @@ export function ManualLyricsEditor({
     setBulkValue(initialLines.map((line) => line.text).join('\n'))
     setBulkOpen(false)
     setEditMode(false)
-    setSpeedDirection('down')
     setError('')
     setSaving(false)
     setDeleting(false)
@@ -178,28 +176,11 @@ export function ManualLyricsEditor({
   }
 
   function handleCyclePlaybackRate() {
+    const rates = [0.5, 0.75, 1, 2]
     const rate = Number(playbackRate) || 1
-
-    if (rate >= 1) {
-      onSetPlaybackRate(0.75)
-      setSpeedDirection('down')
-      return
-    }
-
-    if (rate <= 0.5) {
-      onSetPlaybackRate(0.75)
-      setSpeedDirection('up')
-      return
-    }
-
-    if (speedDirection === 'down') {
-      onSetPlaybackRate(0.5)
-      setSpeedDirection('up')
-      return
-    }
-
-    onSetPlaybackRate(1)
-    setSpeedDirection('down')
+    const currentIndex = rates.findIndex((value) => value === rate)
+    const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % rates.length : 2
+    onSetPlaybackRate(rates[nextIndex])
   }
   
   function handleFileSelect(event: React.ChangeEvent<HTMLInputElement>) {
@@ -328,182 +309,193 @@ export function ManualLyricsEditor({
         <div className="manual-lyrics-editor__header">
           <div className="manual-lyrics-editor__copy">
             <span>Chỉnh lời theo thời gian</span>
-            <h3>{track.title}</h3>
-            <p>{track.artist}</p>
-          </div>
-
-          <button type="button" className="ghost-pill" onClick={onClose}>
-            Đóng
-          </button>
-        </div>
-
-        <div className="manual-lyrics-editor__toolbar">
-          <button
-            type="button"
-            className={`ghost-pill${bulkOpen ? ' is-active' : ''}`}
-            onClick={handleOpenBulkLyrics}
-          >
-            Thêm lyrics
-          </button>
-          <button
-            type="button"
-            className={`ghost-pill${editMode ? ' is-active' : ''}`}
-            onClick={() => {
-              setEditMode((previous) => !previous)
-              setBulkOpen(false)
-            }}
-            disabled={!hasLyrics}
-          >
-            Sửa lyrics
-          </button>
-          <button type="button" className="ghost-pill" onClick={handleStamp}>
-            Gán mốc dòng này
-          </button>
-          <button type="button" className="ghost-pill" onClick={() => handleNudge(-0.5)}>
-            -0.5 giây
-          </button>
-          <button type="button" className="ghost-pill" onClick={() => handleNudge(0.5)}>
-            +0.5 giây
-          </button>
-          <button type="button" className="ghost-pill" onClick={handleSeekSelected} disabled={selectedLine?.startTime === null}>
-            Tới mốc
-          </button>
-          <button type="button" className="ghost-pill" onClick={handleClear}>
-            Xóa mốc
-          </button>
-          <button type="button" className="ghost-pill" onClick={() => fileInputRef.current?.click()}>
-            {saving ? 'Đang lưu ảnh...' : 'Đổi ảnh bìa'}
-          </button>
-          <button
-            type="button"
-            className="ghost-pill"
-            onClick={handleResetCover}
-            disabled={!hasManualThumbnail || resettingCover || saving}
-          >
-            Reset ảnh bìa
-          </button>
-          <button
-            type="button"
-            className="ghost-pill"
-            onClick={handleResetLyrics}
-            disabled={!hasManualSync || resettingLyrics || saving}
-          >
-            Reset lời bài hát
-          </button>
-          <input
-            type="file"
-            ref={fileInputRef}
-            style={{ display: 'none' }}
-            accept="image/*"
-            onChange={handleFileSelect}
-          />
-        </div>
-
-        {bulkOpen ? (
-          <div className="manual-lyrics-editor__bulk">
-            <label className="manual-lyrics-editor__bulk-label" htmlFor="manual-lyrics-bulk">
-              Dán toàn bộ lyrics, mỗi dòng là một câu
-            </label>
-            <textarea
-              id="manual-lyrics-bulk"
-              className="manual-lyrics-editor__bulk-input"
-              value={bulkValue}
-              onChange={(event) => setBulkValue(event.target.value)}
-              placeholder={'Ví dụ:\nCâu 1\nCâu 2\nCâu 3'}
-            />
-            <div className="manual-lyrics-editor__bulk-actions">
-              <button type="button" className="ghost-pill" onClick={() => setBulkOpen(false)}>
-                Hủy thêm
-              </button>
-              <button type="button" className="action-pill" onClick={handleApplyBulkLyrics}>
-                Áp dụng lyrics
-              </button>
+            <div className="manual-lyrics-editor__title-line">
+              <h3>{track.title}</h3>
+              <p>{track.artist}</p>
             </div>
           </div>
-        ) : null}
 
-        <div className="manual-lyrics-editor__transport">
-          <button type="button" className="manual-lyrics-editor__transport-toggle" onClick={onTogglePlayback}>
-            {isPlaying ? 'Tạm dừng' : 'Phát'}
-          </button>
-
-          <span className="manual-lyrics-editor__transport-time">{formatEditorTime(currentTime)}</span>
-
-          <input
-            className="manual-lyrics-editor__transport-range"
-            type="range"
-            min={0}
-            max={Math.max(duration, currentTime, 1)}
-            step={0.1}
-            value={Math.min(currentTime, Math.max(duration, currentTime, 1))}
-            onChange={(event) => onSeek(Number(event.target.value))}
-          />
-
-          <span className="manual-lyrics-editor__transport-time">{formatEditorTime(duration)}</span>
-
-          <button type="button" className="manual-lyrics-editor__speed-button is-active" onClick={handleCyclePlaybackRate}>
-            {playbackRate}x
+          <button type="button" className="manual-lyrics-editor__close" onClick={onClose} aria-label="Đóng">
+            <XIcon />
           </button>
         </div>
 
-        <div className="manual-lyrics-editor__status">
-          <span>Còn {missingCount} dòng chưa gán</span>
-          <span>Phím tắt: `Enter` phát/tạm dừng, `[` chậm hơn, `]` sớm hơn, `\` reset offset toàn bài.</span>
-        </div>
-
-        {error ? <p className="feedback error">{error}</p> : null}
-
-        <div className="manual-lyrics-editor__list">
-          {draftLines.length ? (
-            draftLines.map((line, index) => (
-              <button
-                key={`${line.text}-${index}`}
-                type="button"
-                className={`manual-lyrics-editor__row${index === selectedIndex ? ' is-selected' : ''}${line.startTime !== null ? ' is-complete' : ''}`}
-                onClick={() => setSelectedIndex(index)}
-              >
-                <span className="manual-lyrics-editor__row-index">{index + 1}</span>
-                {editMode ? (
-                  <input
-                    className="manual-lyrics-editor__row-input"
-                    value={line.text}
-                    onChange={(event) => updateLineText(index, event.target.value)}
-                    onClick={(event) => event.stopPropagation()}
-                  />
-                ) : (
-                  <span className="manual-lyrics-editor__row-text">{line.text}</span>
-                )}
-                <span className="manual-lyrics-editor__row-time">{line.startTime === null ? '--:--.-' : formatEditorTime(line.startTime)}</span>
+        <div className="manual-lyrics-editor__body">
+          <div className="manual-lyrics-editor__toolbar">
+            <button
+              type="button"
+              className={`ghost-pill${bulkOpen ? ' is-active' : ''}`}
+              onClick={handleOpenBulkLyrics}
+            >
+              Thêm lyrics
+            </button>
+            <button
+              type="button"
+              className={`ghost-pill${editMode ? ' is-active' : ''}`}
+              onClick={() => {
+                setEditMode((previous) => !previous)
+                setBulkOpen(false)
+              }}
+              disabled={!hasLyrics}
+            >
+              Sửa lyrics
+            </button>
+            <button type="button" className="ghost-pill" onClick={handleStamp}>
+              Gán mốc dòng này
+            </button>
+            <div className="manual-lyrics-editor__toolbar-pair">
+              <button type="button" className="ghost-pill" onClick={() => handleNudge(-0.5)}>
+                -0.5 giây
               </button>
-            ))
-          ) : (
-            <div className="manual-lyrics-editor__empty">Chưa có lyrics cho bài này. Bấm `Thêm lyrics` để dán toàn bộ bài.</div>
-          )}
-        </div>
+              <button type="button" className="ghost-pill" onClick={() => handleNudge(0.5)}>
+                +0.5 giây
+              </button>
+            </div>
+            <div className="manual-lyrics-editor__toolbar-pair">
+              <button type="button" className="ghost-pill" onClick={handleSeekSelected} disabled={selectedLine?.startTime === null}>
+                Tới mốc
+              </button>
+              <button type="button" className="ghost-pill" onClick={handleClear}>
+                Xóa mốc
+              </button>
+            </div>
+            <button type="button" className="ghost-pill" onClick={() => fileInputRef.current?.click()}>
+              {saving ? 'Đang lưu ảnh...' : 'Đổi ảnh bìa'}
+            </button>
+            <button
+              type="button"
+              className="ghost-pill"
+              onClick={handleResetCover}
+              disabled={!hasManualThumbnail || resettingCover || saving}
+            >
+              Reset ảnh bìa
+            </button>
+            <button
+              type="button"
+              className="ghost-pill"
+              onClick={handleResetLyrics}
+              disabled={!hasManualSync || resettingLyrics || saving}
+            >
+              Reset lời bài hát
+            </button>
+            <input
+              type="file"
+              ref={fileInputRef}
+              style={{ display: 'none' }}
+              accept="image/*"
+              onChange={handleFileSelect}
+            />
 
-        <div className="manual-lyrics-editor__footer">
-          <div className="manual-lyrics-editor__footer-meta">
-            <span>
-              {hasManualSync
-                ? 'Bài này đang dùng lời tự canh. Lưu lại sẽ ghi đè mốc cũ.'
-                : allStamped
-                  ? 'Sau khi lưu, player sẽ dùng bộ mốc này.'
-                  : 'Bạn có thể lưu lyrics trước rồi quay lại canh thời gian sau.'}
-            </span>
+            <div className="manual-lyrics-editor__footer manual-lyrics-editor__footer--side">
+              <div className="manual-lyrics-editor__footer-meta">
+                {hasManualSync ? <span>Bài này đang dùng lời tự canh. Lưu lại sẽ ghi đè mốc cũ.</span> : null}
+                {!hasManualSync && allStamped ? <span>Sau khi lưu, player sẽ dùng bộ mốc này.</span> : null}
+              </div>
+
+              <div className="manual-lyrics-editor__footer-actions">
+                {hasManualSync ? (
+                  <button type="button" className="ghost-pill" onClick={handleDelete} disabled={deleting || saving}>
+                    {deleting ? 'Đang xóa...' : 'Xóa lời tự canh'}
+                  </button>
+                ) : null}
+                <div className="manual-lyrics-editor__footer-action-pair">
+                  <button type="button" className="ghost-pill" onClick={onClose} disabled={saving || deleting}>
+                    Hủy
+                  </button>
+                  <button type="button" className="action-pill" onClick={handleSave} disabled={saving || deleting}>
+                    {saving ? 'Đang lưu...' : saveLabel}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
 
-          <div className="manual-lyrics-editor__footer-actions">
-            {hasManualSync ? (
-              <button type="button" className="ghost-pill" onClick={handleDelete} disabled={deleting || saving}>
-                {deleting ? 'Đang xóa...' : 'Xóa lời tự canh'}
-              </button>
+          <div className="manual-lyrics-editor__main">
+            {bulkOpen ? (
+              <div className="manual-lyrics-editor__bulk">
+                <label className="manual-lyrics-editor__bulk-label" htmlFor="manual-lyrics-bulk">
+                  Dán toàn bộ lyrics, mỗi dòng là một câu
+                </label>
+                <textarea
+                  id="manual-lyrics-bulk"
+                  className="manual-lyrics-editor__bulk-input"
+                  value={bulkValue}
+                  onChange={(event) => setBulkValue(event.target.value)}
+                  placeholder={'Ví dụ:\nCâu 1\nCâu 2\nCâu 3'}
+                />
+                <div className="manual-lyrics-editor__bulk-actions">
+                  <button type="button" className="ghost-pill" onClick={() => setBulkOpen(false)}>
+                    Hủy thêm
+                  </button>
+                  <button type="button" className="action-pill" onClick={handleApplyBulkLyrics}>
+                    Áp dụng lyrics
+                  </button>
+                </div>
+              </div>
             ) : null}
-            <button type="button" className="ghost-pill" onClick={onClose} disabled={saving || deleting}>
-              Hủy
-            </button>
-            <button type="button" className="action-pill" onClick={handleSave} disabled={saving || deleting}>
-              {saving ? 'Đang lưu...' : saveLabel}
-            </button>
+
+            <div className="manual-lyrics-editor__transport">
+              <button
+                type="button"
+                className="manual-lyrics-editor__transport-toggle"
+                onClick={onTogglePlayback}
+                aria-label={isPlaying ? 'Tạm dừng' : 'Phát'}
+              >
+                {isPlaying ? <PauseIcon /> : <PlayIcon />}
+              </button>
+
+              <span className="manual-lyrics-editor__transport-time">{formatEditorTime(currentTime)}</span>
+
+              <input
+                className="manual-lyrics-editor__transport-range"
+                type="range"
+                min={0}
+                max={Math.max(duration, currentTime, 1)}
+                step={0.1}
+                value={Math.min(currentTime, Math.max(duration, currentTime, 1))}
+                onChange={(event) => onSeek(Number(event.target.value))}
+              />
+
+              <span className="manual-lyrics-editor__transport-time">{formatEditorTime(duration)}</span>
+
+              <button type="button" className="manual-lyrics-editor__speed-button is-active" onClick={handleCyclePlaybackRate}>
+                {playbackRate}x
+              </button>
+            </div>
+
+            <div className="manual-lyrics-editor__status">
+              <span>Còn {missingCount} dòng chưa gán</span>
+            </div>
+
+            {error ? <p className="feedback error">{error}</p> : null}
+
+            <div className="manual-lyrics-editor__list">
+              {draftLines.length ? (
+                draftLines.map((line, index) => (
+                  <button
+                    key={`${line.text}-${index}`}
+                    type="button"
+                    className={`manual-lyrics-editor__row${index === selectedIndex ? ' is-selected' : ''}${line.startTime !== null ? ' is-complete' : ''}`}
+                    onClick={() => setSelectedIndex(index)}
+                  >
+                    <span className="manual-lyrics-editor__row-index">{index + 1}</span>
+                    {editMode ? (
+                      <input
+                        className="manual-lyrics-editor__row-input"
+                        value={line.text}
+                        onChange={(event) => updateLineText(index, event.target.value)}
+                        onClick={(event) => event.stopPropagation()}
+                      />
+                    ) : (
+                      <span className="manual-lyrics-editor__row-text">{line.text}</span>
+                    )}
+                    <span className="manual-lyrics-editor__row-time">{line.startTime === null ? '--:--.-' : formatEditorTime(line.startTime)}</span>
+                  </button>
+                ))
+              ) : (
+                <div className="manual-lyrics-editor__empty">Chưa có lyrics cho bài này. Bấm `Thêm lyrics` để dán toàn bộ bài.</div>
+              )}
+            </div>
           </div>
         </div>
       </section>
@@ -520,4 +512,34 @@ function formatEditorTime(value: number) {
   const base = formatDuration(rounded)
   const tenth = Math.round((rounded % 1) * 10)
   return `${base}.${tenth}`
+}
+
+function PlayIcon() {
+  return (
+    <svg className="manual-lyrics-editor__play-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M8 5.5v13l10-6.5-10-6.5Z" fill="currentColor" />
+    </svg>
+  )
+}
+
+function PauseIcon() {
+  return (
+    <svg className="manual-lyrics-editor__play-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M7 5h4v14H7V5Zm6 0h4v14h-4V5Z" fill="currentColor" />
+    </svg>
+  )
+}
+
+function XIcon() {
+  return (
+    <svg className="manual-lyrics-editor__close-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M6 6l12 12M18 6 6 18"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
 }

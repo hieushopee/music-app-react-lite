@@ -13,6 +13,7 @@ interface LyricsViewProps {
 export function LyricsView({ lines, activeIndex, loading, error, synced, onSeekLine }: LyricsViewProps) {
   const wallRef = useRef<HTMLDivElement | null>(null)
   const refs = useRef<Array<HTMLElement | null>>([])
+  const lastActiveIndexRef = useRef(-1)
 
   useEffect(() => {
     if (activeIndex < 0) return
@@ -26,9 +27,20 @@ export function LyricsView({ lines, activeIndex, loading, error, synced, onSeekL
     const finalScrollTop = Math.max(scrollContainer.scrollHeight - scrollContainer.clientHeight, 0)
     const lineTop = activeLine.offsetTop
     const lineHeight = activeLine.offsetHeight
-    const topTarget = lineTop - 28
-    const idealScrollTop = activeIndex <= 1 ? topTarget : lineTop - viewportHeight * 0.46 + lineHeight / 2
-    const nextScrollTop = Math.max(0, Math.min(idealScrollTop, finalScrollTop))
+    const previousActiveIndex = lastActiveIndexRef.current
+    const isMovingForward = previousActiveIndex >= 0 && activeIndex > previousActiveIndex
+    const anchorY = viewportHeight * 0.46
+    const lineCenter = lineTop + lineHeight / 2
+    const shouldAdvance = lineCenter > currentScrollTop + anchorY
+    const idealScrollTop = activeIndex <= 1 ? 0 : lineCenter - anchorY
+    const forwardScrollTop = shouldAdvance ? Math.max(currentScrollTop, idealScrollTop) : currentScrollTop
+    const nextScrollTop = Math.max(
+      0,
+      Math.min(isMovingForward ? forwardScrollTop : idealScrollTop, finalScrollTop)
+    )
+
+    lastActiveIndexRef.current = activeIndex
+
     if (Math.abs(nextScrollTop - currentScrollTop) < 8) return
 
     scrollContainer.scrollTo({
