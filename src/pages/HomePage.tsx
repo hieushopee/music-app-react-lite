@@ -1,19 +1,42 @@
-import { startTransition, useEffect, useState } from 'react'
+import { startTransition, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { Track } from '../services/musicApi'
-import { searchMusic } from '../services/musicApi'
+import type { Track, Album } from '../services/musicApi'
+import { searchMusic, searchAlbums, fetchAlbumDetail } from '../services/musicApi'
 import { SectionBlock } from '../components/SectionBlock'
+import { AlbumCard } from '../components/AlbumCard'
 import { formatDuration } from '../lib/format'
 import { getCoverStyle } from '../lib/cover'
 import { usePlayer } from '../store/player'
 
 const quickQueries = ['Nhac tre 2026', 'V-Pop chill', 'US UK acoustic', 'Lofi Viet', 'EDM workout']
 
-const sectionQueries = [
-  { key: 'pulse', title: 'Nhịp phổ biến', subtitle: 'Chọn nhanh từ YouTube Music', query: 'Top hits Vietnam 2026' },
-  { key: 'night', title: 'Buổi tối nhẹ', subtitle: 'Nghe dài và thư giãn', query: 'Chill acoustic vietnam' },
-  { key: 'motion', title: 'Tăng năng lượng', subtitle: 'Danh mục cho lúc di chuyển', query: 'Workout music mix' },
+const albumQueries = [
+  'Vpop album hay nhất',
+  'Son Tung MTP album',
+  'Đen Vâu album',
+  'Hà Anh Tuấn album',
+  'Hoàng Dũng album',
+  'Vũ album',
+  'Tóc Tiên album',
+  'Ngọt album',
+  'Chillies album',
+  'Da LAB album'
 ]
+
+const sectionQueries = [
+  { key: 'pulse', title: 'Nhịp phổ biến', subtitle: 'Chọn nhanh từ YouTube Music', queries: ['Top hits Vietnam 2026', 'Nhạc trẻ hot tiktok', 'Vpop mới nhất', 'Nhạc trẻ remix hay nhất'] },
+  { key: 'night', title: 'Buổi tối nhẹ', subtitle: 'Nghe dài và thư giãn', queries: ['Chill acoustic vietnam', 'Lofi viet chill', 'Nhạc không lời thư giãn', 'Acoustic cover hay nhất'] },
+  { key: 'motion', title: 'Tăng năng lượng', subtitle: 'Danh mục cho lúc di chuyển', queries: ['Workout music mix', 'EDM viet remix', 'Nhạc chạy bộ', 'Vinahouse 2026'] },
+]
+
+function shuffle<T>(array: T[]): T[] {
+  const arr = [...array]
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]]
+  }
+  return arr
+}
 
 export function HomePage() {
   const navigate = useNavigate()
@@ -24,12 +47,54 @@ export function HomePage() {
   const [sections, setSections] = useState<Record<string, Track[]>>({})
   const [loadingSections, setLoadingSections] = useState(true)
   const [sectionsError, setSectionsError] = useState('')
+  const [albums, setAlbums] = useState<Album[]>([])
+  const [loadingAlbums, setLoadingAlbums] = useState(true)
+  const albumGridRef = useRef<HTMLDivElement>(null)
 
   const favoriteIds = new Set(state.favorites.map((track) => track.id))
 
   useEffect(() => {
     setQuery(state.lastQuery)
   }, [state.lastQuery])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadAlbums() {
+      setLoadingAlbums(true)
+      try {
+        const allAlbums: Album[] = []
+        const seen = new Set<string>()
+
+        const selectedQueries = shuffle(albumQueries).slice(0, 3)
+        const results = await Promise.all(
+          selectedQueries.map((q) => searchAlbums(q, state.apiBase))
+        )
+
+        for (const batch of results) {
+          for (const album of batch) {
+            if (!seen.has(album.albumId)) {
+              seen.add(album.albumId)
+              allAlbums.push(album)
+            }
+          }
+        }
+
+        if (!cancelled) {
+          startTransition(() => {
+            setAlbums(shuffle(allAlbums).slice(0, 20))
+          })
+        }
+      } catch {
+        // Ignore album loading errors
+      } finally {
+        if (!cancelled) setLoadingAlbums(false)
+      }
+    }
+
+    loadAlbums()
+    return () => { cancelled = true }
+  }, [state.apiBase])
 
   useEffect(() => {
     let cancelled = false
@@ -41,8 +106,9 @@ export function HomePage() {
       try {
         const results = await Promise.all(
           sectionQueries.map(async (section) => {
-            const items = await searchMusic(section.query, state.apiBase)
-            return [section.key, items.slice(0, 6)] as const
+            const randomQuery = section.queries[Math.floor(Math.random() * section.queries.length)]
+            const items = await searchMusic(randomQuery, state.apiBase)
+            return [section.key, shuffle(items).slice(0, 20)] as const
           })
         )
 
@@ -72,6 +138,44 @@ export function HomePage() {
     }
   }, [state.apiBase])
 
+  async function refreshAlbums() {
+    setLoadingAlbums(true)
+    try {
+      const allAlbums: Album[] = []
+      const seen = new Set<string>()
+      const selectedQueries = shuffle(albumQueries).slice(0, 3)
+      const results = await Promise.all(
+        selectedQueries.map((q) => searchAlbums(q, state.apiBase))
+      )
+      for (const batch of results) {
+        for (const album of batch) {
+          if (!seen.has(album.albumId)) {
+            seen.add(album.albumId)
+            allAlbums.push(album)
+          }
+        }
+      }
+      setAlbums(shuffle(allAlbums).slice(0, 20))
+    } catch {
+      // ignore
+    } finally {
+      setLoadingAlbums(false)
+    }
+  }
+
+  async function refreshSection(sectionKey: string) {
+    setSections((prev) => ({ ...prev, [sectionKey]: [] }))
+    try {
+      const section = sectionQueries.find(s => s.key === sectionKey)
+      if (!section) return
+      const randomQuery = section.queries[Math.floor(Math.random() * section.queries.length)]
+      const items = await searchMusic(randomQuery, state.apiBase)
+      setSections((prev) => ({ ...prev, [sectionKey]: shuffle(items).slice(0, 20) }))
+    } catch {
+      // ignore
+    }
+  }
+
   async function handleSearch(submittedQuery?: string) {
     const keyword = String(submittedQuery ?? query).trim()
     if (!keyword) return
@@ -94,12 +198,24 @@ export function HomePage() {
     navigate('/player')
   }
 
+  function handleAlbumClick(album: Album) {
+    if (album.albumId) {
+      navigate(`/album/${encodeURIComponent(album.albumId)}`)
+    }
+  }
+
+  function scrollAlbumGrid(direction: 'left' | 'right') {
+    if (!albumGridRef.current) return
+    const scrollAmount = Math.max(260, albumGridRef.current.clientWidth * 0.75)
+    albumGridRef.current.scrollBy({ left: direction === 'left' ? -scrollAmount : scrollAmount, behavior: 'smooth' })
+  }
+
   return (
     <div className="home-page">
       <section className="hero-panel">
         <div className="hero-copy">
           <span>Trình phát nhạc thế hệ mới</span>
-          <h2>Không gian âm nhạc tối giản & thuần khiết.</h2>
+          <h2>Không gian âm nhạc tối giản &amp; thuần khiết.</h2>
           <p>
             Tận hưởng hàng triệu bài hát với chất lượng cao nhất, giao diện tập trung hoàn toàn vào cảm xúc và nghệ thuật của
             người nghệ sĩ.
@@ -179,7 +295,7 @@ export function HomePage() {
         <SectionBlock
           title={state.lastQuery || 'Kết quả gần nhất'}
           subtitle="Từ khóa vừa tìm"
-          tracks={state.lastResults.slice(0, 12)}
+          tracks={state.lastResults.slice(0, 30)}
           activeTrackId={currentTrack?.id || ''}
           favoriteIds={favoriteIds}
           emptyLabel="Chưa có kết quả tìm kiếm."
@@ -188,11 +304,61 @@ export function HomePage() {
         />
       ) : null}
 
+      {/* Album nổi tiếng - Đĩa nhạc cho bạn */}
+      <section className="section-block">
+        <div className="section-head">
+          <div>
+            <span>Đĩa nhạc cho bạn</span>
+            <h2>Album nổi tiếng</h2>
+          </div>
+          <div className="section-nav">
+            <button type="button" onClick={refreshAlbums} aria-label="Làm mới">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M23 4v6h-6" />
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+              </svg>
+            </button>
+            <button type="button" onClick={() => scrollAlbumGrid('left')} aria-label="Cuộn trái">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
+            </button>
+            <button type="button" onClick={() => scrollAlbumGrid('right')} aria-label="Cuộn phải">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        {loadingAlbums ? (
+          <div className="album-grid" ref={albumGridRef}>
+            {[...Array(8)].map((_, i) => (
+              <div key={i} className="album-card" style={{ opacity: 0.4 }}>
+                <div className="album-card__cover skeleton-item" />
+                <div className="album-card__meta">
+                  <div className="skeleton-item skeleton-item--text" style={{ width: '80%' }} />
+                  <div className="skeleton-item skeleton-item--text" style={{ width: '50%' }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : albums.length ? (
+          <div className="album-grid" ref={albumGridRef}>
+            {albums.map((album) => (
+              <AlbumCard key={album.albumId} album={album} onClick={() => handleAlbumClick(album)} />
+            ))}
+          </div>
+        ) : (
+          <div className="empty-panel">Không tải được danh sách album.</div>
+        )}
+      </section>
+
       {state.favorites.length ? (
         <SectionBlock
           title="Bài hát bạn đã thích"
           subtitle="Có thể mở lại rất nhanh"
-          tracks={state.favorites.slice(0, 8)}
+          tracks={state.favorites.slice(0, 20)}
           activeTrackId={currentTrack?.id || ''}
           favoriteIds={favoriteIds}
           emptyLabel="Chưa có bài yêu thích."
@@ -204,7 +370,7 @@ export function HomePage() {
       <SectionBlock
         title="Nghe gần đây"
         subtitle="Lịch sử của bạn"
-        tracks={state.history.slice(0, 8)}
+        tracks={state.history.slice(0, 20)}
         activeTrackId={currentTrack?.id || ''}
         favoriteIds={favoriteIds}
         emptyLabel="Lịch sử sẽ xuất hiện sau khi bạn phát bài đầu tiên."
@@ -224,6 +390,7 @@ export function HomePage() {
           emptyLabel="Không tải được danh mục này."
           onPlayTrack={playTrack}
           onToggleFavorite={actions.toggleFavorite}
+          onRefresh={() => refreshSection(section.key)}
         />
       ))}
     </div>

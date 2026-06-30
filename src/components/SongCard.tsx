@@ -1,4 +1,5 @@
 import type { Track } from '../services/musicApi'
+import { getConfiguredApiBase } from '../services/musicApi'
 import { getCoverStyle } from '../lib/cover'
 import { formatDuration } from '../lib/format'
 
@@ -34,6 +35,20 @@ export function SongCard({ track, isActive, isFavorite, onPlay, onToggleFavorite
         <button type="button" className={`action-chip${isFavorite ? ' is-active' : ''}`} onClick={onToggleFavorite}>
           {isFavorite ? 'Đã thích' : 'Yêu thích'}
         </button>
+        <a 
+          href={`${getConfiguredApiBase()}/api/download?videoId=${track.id}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="action-chip action-chip--icon" 
+          aria-label="Tải xuống audio"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <svg style={{ width: '16px', height: '16px' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+        </a>
       </div>
     </article>
   )

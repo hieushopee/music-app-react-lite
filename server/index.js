@@ -2,6 +2,7 @@ import express from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
 import YTMusic from 'ytmusic-api'
+import ytdl from '@distube/ytdl-core'
 import lrclibApi from 'lrclib-api'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
@@ -638,6 +639,81 @@ app.get('/api/artist', async (req, res) => {
     res.json({ item: ranked.normalized })
   } catch {
     res.status(500).json({ error: 'YT Music artist error' })
+  }
+})
+
+app.get('/api/albums', async (req, res) => {
+  const query = String(req.query.q || '').trim()
+  if (!query) {
+    return res.status(400).json({ error: 'Missing q parameter' })
+  }
+
+  try {
+    await ensureYtMusic()
+
+    const albums = await ytmusic.searchAlbums(query)
+    const items = (albums || []).slice(0, 20).map((album) => ({
+      albumId: album.albumId || '',
+      playlistId: album.playlistId || '',
+      name: String(album.name || 'Unknown album'),
+      artist: String(album.artist?.name || 'Unknown artist'),
+      artistId: String(album.artist?.artistId || ''),
+      year: album.year || null,
+      thumbnail: upscaleThumbnail(pickThumb(album.thumbnails || [])),
+    })).filter(a => a.albumId)
+
+    res.json({ items })
+  } catch {
+    res.status(500).json({ error: 'YT Music albums error' })
+  }
+})
+
+app.get('/api/album/:id', async (req, res) => {
+  const albumId = String(req.params.id || '').trim()
+  if (!albumId) {
+    return res.status(400).json({ error: 'Missing album id' })
+  }
+
+  try {
+    await ensureYtMusic()
+
+    const album = await ytmusic.getAlbum(albumId)
+    if (!album) {
+      return res.status(404).json({ error: 'Album not found' })
+    }
+
+    const songs = (album.songs || []).map(normalizeSong).filter(Boolean)
+
+    res.json({
+      name: String(album.name || 'Unknown album'),
+      artist: String(album.artist?.name || 'Unknown artist'),
+      year: album.year || null,
+      thumbnail: upscaleThumbnail(pickThumb(album.thumbnails || [])),
+      songs,
+    })
+  } catch {
+    res.status(500).json({ error: 'YT Music album error' })
+  }
+})
+
+app.get('/api/download', async (req, res) => {
+  const videoId = String(req.query.videoId || '').trim()
+  if (!videoId) {
+    return res.status(400).json({ error: 'Missing videoId parameter' })
+  }
+
+  try {
+    const info = await ytdl.getInfo(videoId)
+    const title = (info.videoDetails?.title || 'audio').replace(/[^\w\s\u00C0-\u024F-]/gi, '').trim()
+    const format = ytdl.chooseFormat(info.formats, { quality: 'highestaudio' })
+    const ext = format.container === 'mp4' ? 'm4a' : format.container || 'mp3'
+
+    res.header('Content-Disposition', `attachment; filename="${encodeURIComponent(title)}.${ext}"`)
+    res.header('Content-Type', format.mimeType || 'audio/mpeg')
+
+    ytdl(videoId, { format }).pipe(res)
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to download audio' })
   }
 })
 

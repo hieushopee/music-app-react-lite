@@ -450,3 +450,46 @@ export async function resetManualLyrics(videoId: string, baseOverride = '') {
     method: 'DELETE',
   })
 }
+
+export interface Album {
+  albumId: string
+  playlistId: string
+  name: string
+  artist: string
+  artistId: string
+  year: number | null
+  thumbnail: string
+}
+
+export interface AlbumDetail {
+  name: string
+  artist: string
+  year: number | null
+  thumbnail: string
+  songs: Track[]
+}
+
+export async function searchAlbums(query: string, baseOverride = ''): Promise<Album[]> {
+  const keyword = String(query || '').trim()
+  if (!keyword) return []
+
+  const data = await requestViaCandidates(`/api/albums?q=${encodeURIComponent(keyword)}`, baseOverride)
+  return Array.isArray(data?.items) ? data.items : []
+}
+
+export async function fetchAlbumDetail(albumId: string, baseOverride = ''): Promise<AlbumDetail | null> {
+  const id = String(albumId || '').trim()
+  if (!id) return null
+
+  const data = await requestViaCandidates(`/api/album/${encodeURIComponent(id)}`, baseOverride)
+  if (!data) return null
+
+  return {
+    name: String(data.name || ''),
+    artist: String(data.artist || ''),
+    year: data.year || null,
+    thumbnail: String(data.thumbnail || ''),
+    songs: normalizeTrackList(data.songs),
+  }
+}
+

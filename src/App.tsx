@@ -6,6 +6,8 @@ import { HomePage } from './pages/HomePage'
 import { PlayerPage } from './pages/PlayerPage'
 import { SettingsPage } from './pages/SettingsPage'
 
+import { AlbumPage } from './pages/AlbumPage'
+
 export default function App() {
   return (
     <>
@@ -14,6 +16,7 @@ export default function App() {
       <Routes>
         <Route element={<AppShell />}>
           <Route path="/" element={<HomePage />} />
+          <Route path="/album/:id" element={<AlbumPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
         <Route path="/player" element={<PlayerPage />} />
