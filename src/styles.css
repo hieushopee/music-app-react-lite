@@ -1356,6 +1356,38 @@ code {
   color: rgba(248, 245, 234, 0.76);
 }
 
+.manual-lyrics-editor__row-time {
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 8px;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.manual-lyrics-editor__row-time:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(248, 245, 234, 0.95);
+}
+
+.manual-lyrics-editor__row-time-input {
+  width: 80px;
+  padding: 2px 6px;
+  border: 0;
+  border-bottom: 2px solid rgba(255, 220, 140, 0.6);
+  border-radius: 6px 6px 0 0;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(248, 245, 234, 0.95);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.manual-lyrics-editor__row-time-input:focus {
+  outline: none;
+  border-bottom-color: rgba(143, 236, 197, 0.9);
+  background: rgba(255, 255, 255, 0.12);
+}
+
 .manual-lyrics-editor__row-text {
   line-height: 1.5;
 }
@@ -1628,7 +1660,8 @@ code {
     grid-template-columns: 28px minmax(0, 1fr);
   }
 
-  .manual-lyrics-editor__row-time {
+  .manual-lyrics-editor__row-time,
+  .manual-lyrics-editor__row-time-input {
     grid-column: 2;
   }
 }

@@ -57,7 +57,10 @@ export function ManualLyricsEditor({
   const [customThumbnail, setCustomThumbnail] = useState('')
   const [resettingCover, setResettingCover] = useState(false)
   const [resettingLyrics, setResettingLyrics] = useState(false)
+  const [editingTimeIndex, setEditingTimeIndex] = useState<number | null>(null)
+  const [editingTimeValue, setEditingTimeValue] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const timeInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!open) return
@@ -73,7 +76,16 @@ export function ManualLyricsEditor({
     setResettingCover(false)
     setResettingLyrics(false)
     setCustomThumbnail('')
+    setEditingTimeIndex(null)
+    setEditingTimeValue('')
   }, [open, initialLines, track?.id])
+
+  useEffect(() => {
+    if (editingTimeIndex !== null && timeInputRef.current) {
+      timeInputRef.current.focus()
+      timeInputRef.current.select()
+    }
+  }, [editingTimeIndex])
 
   const selectedLine = draftLines[selectedIndex] || null
   const missingCount = useMemo(() => draftLines.filter((line) => line.startTime === null).length, [draftLines])
@@ -139,6 +151,63 @@ export function ManualLyricsEditor({
   function handleClear() {
     updateSelectedLine(null)
     setError('')
+  }
+
+  function handleStartEditTime(index: number) {
+    const line = draftLines[index]
+    setEditingTimeIndex(index)
+    setEditingTimeValue(line.startTime === null ? '' : formatEditorTime(line.startTime))
+  }
+
+  function handleCommitTime() {
+    if (editingTimeIndex === null) return
+
+    const trimmed = editingTimeValue.trim()
+    if (!trimmed) {
+      setEditingTimeIndex(null)
+      setEditingTimeValue('')
+      return
+    }
+
+    const parsed = parseEditorTime(trimmed)
+    if (parsed === null) {
+      setError('Định dạng thời gian không hợp lệ. Dùng MM:SS.T (ví dụ: 01:23.5)')
+      setEditingTimeIndex(null)
+      setEditingTimeValue('')
+      return
+    }
+
+    setDraftLines((previous) =>
+      previous.map((line, index) =>
+        index === editingTimeIndex ? { ...line, startTime: roundTime(parsed) } : line
+      )
+    )
+    setError('')
+    setEditingTimeIndex(null)
+    setEditingTimeValue('')
+  }
+
+  function handleCancelEditTime() {
+    setEditingTimeIndex(null)
+    setEditingTimeValue('')
+  }
+
+  function handleTimeChange(value: string) {
+    setEditingTimeValue(value)
+    if (editingTimeIndex === null) return
+
+    const trimmed = value.trim()
+    if (!trimmed) return
+
+    const parsed = parseEditorTime(trimmed)
+    if (parsed !== null) {
+      setDraftLines((previous) =>
+        previous.map((line, index) =>
+          index === editingTimeIndex ? { ...line, startTime: roundTime(parsed) } : line
+        )
+      )
+      setError('')
+    }
   }
 
   function updateLineText(index: number, text: string) {
@@ -489,7 +558,37 @@ export function ManualLyricsEditor({
                     ) : (
                       <span className="manual-lyrics-editor__row-text">{line.text}</span>
                     )}
-                    <span className="manual-lyrics-editor__row-time">{line.startTime === null ? '--:--.-' : formatEditorTime(line.startTime)}</span>
+                    {editingTimeIndex === index ? (
+                      <input
+                        ref={timeInputRef}
+                        className="manual-lyrics-editor__row-time-input"
+                        value={editingTimeValue}
+                        onChange={(event) => handleTimeChange(event.target.value)}
+                        onBlur={handleCommitTime}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault()
+                            handleCommitTime()
+                          } else if (event.key === 'Escape') {
+                            event.preventDefault()
+                            handleCancelEditTime()
+                          }
+                        }}
+                        onClick={(event) => event.stopPropagation()}
+                        placeholder="MM:SS.T"
+                      />
+                    ) : (
+                      <span
+                        className="manual-lyrics-editor__row-time"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          handleStartEditTime(index)
+                        }}
+                        title="Nhấn để sửa thời gian"
+                      >
+                        {line.startTime === null ? '--:--.-' : formatEditorTime(line.startTime)}
+                      </span>
+                    )}
                   </button>
                 ))
               ) : (
@@ -512,6 +611,67 @@ function formatEditorTime(value: number) {
   const base = formatDuration(rounded)
   const tenth = Math.round((rounded % 1) * 10)
   return `${base}.${tenth}`
+}
+
+function parseEditorTime(input: string): number | null {
+  const trimmed = input.trim()
+  if (!trimmed) return null
+
+  // Try MM:SS.T or MM:SS
+  const colonMatch = trimmed.match(/^(\d{1,3}):(\d{1,2})(?:\.(\d))?$/)
+  if (colonMatch) {
+    const minutes = Number(colonMatch[1])
+    const seconds = Number(colonMatch[2])
+    const tenths = colonMatch[3] ? Number(colonMatch[3]) : 0
+    if (seconds >= 60) return null
+    return minutes * 60 + seconds + tenths / 10
+  }
+
+  // Try explicit dot format (e.g. 12.3 -> 12s 3t, 112.3 -> 1m 12s 3t)
+  const dotMatch = trimmed.match(/^(\d+)\.(\d)$/)
+  if (dotMatch) {
+    const digits = dotMatch[1]
+    const tenths = Number(dotMatch[2])
+    
+    if (digits.length >= 3) {
+      const minutes = Number(digits.slice(0, -2))
+      const seconds = Number(digits.slice(-2))
+      if (seconds >= 60) return null
+      return minutes * 60 + seconds + tenths / 10
+    }
+    
+    const seconds = Number(digits)
+    if (seconds >= 60) return null
+    return seconds + tenths / 10
+  }
+
+  // Try pure digits sequence (right-to-left shift: T -> SS -> M)
+  const pureDigitsMatch = trimmed.match(/^\d+$/)
+  if (pureDigitsMatch) {
+    const digits = trimmed
+    let minutes = 0
+    let seconds = 0
+    let tenths = 0
+
+    if (digits.length === 1) {
+      tenths = Number(digits)
+    } else if (digits.length === 2) {
+      seconds = Number(digits.slice(0, 1))
+      tenths = Number(digits.slice(1))
+    } else if (digits.length === 3) {
+      seconds = Number(digits.slice(0, 2))
+      tenths = Number(digits.slice(2))
+    } else {
+      tenths = Number(digits.slice(-1))
+      seconds = Number(digits.slice(-3, -1))
+      minutes = Number(digits.slice(0, -3))
+    }
+
+    if (seconds >= 60) return null
+    return minutes * 60 + seconds + tenths / 10
+  }
+
+  return null
 }
 
 function PlayIcon() {

@@ -51,6 +51,29 @@ export function HiddenYouTubePlayer() {
     }
   })
 
+  const handleGlobalKeyDown = useEffectEvent((event: KeyboardEvent) => {
+    if (
+      document.activeElement instanceof HTMLInputElement ||
+      document.activeElement instanceof HTMLTextAreaElement ||
+      (document.activeElement as HTMLElement)?.isContentEditable
+    ) {
+      return
+    }
+
+    if (event.key === 'ArrowLeft') {
+      actions.seek(Math.max(0, state.progress - 5))
+    } else if (event.key === 'ArrowRight') {
+      actions.seek(state.progress + 5)
+    }
+  })
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleGlobalKeyDown)
+    return () => {
+      window.removeEventListener('keydown', handleGlobalKeyDown)
+    }
+  }, [])
+
   useEffect(() => {
     let cancelled = false
 
@@ -154,5 +177,9 @@ export function HiddenYouTubePlayer() {
     actions.acknowledgeSeek()
   }, [state.pendingSeek])
 
-  return <div className="yt-host" aria-hidden="true" ref={hostRef} />
+  return (
+    <div className="yt-host" aria-hidden="true">
+      <div ref={hostRef} />
+    </div>
+  )
 }
