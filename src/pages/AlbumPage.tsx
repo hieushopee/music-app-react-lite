@@ -3,13 +3,12 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { usePlayer } from '../store/player'
 import { fetchAlbumDetail } from '../services/musicApi'
 import type { AlbumDetail, Track } from '../services/musicApi'
-import { getCoverStyle } from '../lib/cover'
 import { formatDuration } from '../lib/format'
 
 export function AlbumPage() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { state, actions } = usePlayer()
+  const { state, currentTrack, actions } = usePlayer()
   
   const [album, setAlbum] = useState<AlbumDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -113,7 +112,7 @@ export function AlbumPage() {
         {album.songs.map((song, index) => (
           <div 
             key={song.id} 
-            className={`track-row ${state.currentTrackId === song.id ? 'is-active' : ''}`}
+            className={`track-row ${currentTrack?.id === song.id ? 'is-active' : ''}`}
             onClick={() => handlePlayTrack(song)}
           >
             <div className="track-row__index">

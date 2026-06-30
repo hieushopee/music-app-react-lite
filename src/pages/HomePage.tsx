@@ -1,7 +1,7 @@
 import { startTransition, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Track, Album } from '../services/musicApi'
-import { searchMusic, searchAlbums, fetchAlbumDetail } from '../services/musicApi'
+import { searchMusic, searchAlbums } from '../services/musicApi'
 import { SectionBlock } from '../components/SectionBlock'
 import { AlbumCard } from '../components/AlbumCard'
 import { formatDuration } from '../lib/format'
