@@ -21,6 +21,8 @@ interface YouTubeNamespace {
     ENDED: number
     PLAYING: number
     PAUSED: number
+    BUFFERING: number
+    CUED: number
   }
   Player: new (
     element: HTMLElement,
