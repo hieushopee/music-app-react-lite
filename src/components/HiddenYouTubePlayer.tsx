@@ -7,6 +7,7 @@ export function HiddenYouTubePlayer() {
   const playerRef = useRef<YouTubePlayerApi | null>(null)
   const loadedVideoIdRef = useRef('')
   const intervalRef = useRef<number | null>(null)
+  const pendingPlayRef = useRef(false)
   const { currentTrack, state, actions } = usePlayer()
 
   const syncProgress = useEffectEvent(() => {
@@ -37,6 +38,15 @@ export function HiddenYouTubePlayer() {
   const handleStateChange = useEffectEvent((event: { data?: number }) => {
     const YT = window.YT
     if (!YT) return
+
+    if (
+      pendingPlayRef.current &&
+      (event.data === YT.PlayerState.BUFFERING || event.data === YT.PlayerState.CUED)
+    ) {
+      pendingPlayRef.current = false
+      playerRef.current?.playVideo()
+      return
+    }
 
     if (event.data === YT.PlayerState.PLAYING) {
       actions.setPlaying(true)
@@ -100,7 +110,7 @@ export function HiddenYouTubePlayer() {
             handleStateChange(event)
           },
           onError: () => {
-            actions.setPlaying(false)
+            actions.handleTrackEnd()
           },
         },
       })
@@ -133,15 +143,17 @@ export function HiddenYouTubePlayer() {
 
     if (loadedVideoIdRef.current === currentTrack.id) return
 
-    if (state.isPlaying) {
-      player.loadVideoById(currentTrack.id)
-    } else {
-      player.cueVideoById(currentTrack.id)
-    }
-
     player.setVolume(Math.round(state.volume * 100))
     player.setPlaybackRate(state.playbackRate)
     loadedVideoIdRef.current = currentTrack.id
+
+    if (state.isPlaying) {
+      pendingPlayRef.current = true
+      player.loadVideoById(currentTrack.id)
+    } else {
+      pendingPlayRef.current = false
+      player.cueVideoById(currentTrack.id)
+    }
   }, [currentTrack?.id, state.playbackRate])
 
   useEffect(() => {
@@ -163,11 +175,13 @@ export function HiddenYouTubePlayer() {
     if (!player || !currentTrack) return
 
     if (state.isPlaying) {
+      pendingPlayRef.current = false
       player.playVideo()
     } else {
+      pendingPlayRef.current = false
       player.pauseVideo()
     }
-  }, [state.isPlaying, currentTrack?.id])
+  }, [state.isPlaying])
 
   useEffect(() => {
     const player = playerRef.current
