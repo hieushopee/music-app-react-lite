@@ -2,11 +2,11 @@ import express from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
 import YTMusic from 'ytmusic-api'
-import ytdl from '@distube/ytdl-core'
 import lrclibApi from 'lrclib-api'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import youtubeDl from 'youtube-dl-exec'
 
 dotenv.config()
 
@@ -109,7 +109,8 @@ function upscaleThumbnail(url, videoId = '') {
 
   const id = String(videoId || '').trim()
   if (id && (!input || input.includes('ytimg.com'))) {
-    return `https://i.ytimg.com/vi/${id}/hq720.jpg`
+    // maxresdefault is highest quality; client should fallback to mqdefault if 404
+    return `https://i.ytimg.com/vi/${id}/maxresdefault.jpg`
   }
 
   return input
@@ -702,18 +703,52 @@ app.get('/api/download', async (req, res) => {
     return res.status(400).json({ error: 'Missing videoId parameter' })
   }
 
+  const url = `https://www.youtube.com/watch?v=${videoId}`
+
   try {
-    const info = await ytdl.getInfo(videoId)
-    const title = (info.videoDetails?.title || 'audio').replace(/[^\w\s\u00C0-\u024F-]/gi, '').trim()
-    const format = ytdl.chooseFormat(info.formats, { quality: 'highestaudio' })
-    const ext = format.container === 'mp4' ? 'm4a' : format.container || 'mp3'
+    // Get title first
+    const info = await youtubeDl(url, {
+      dumpSingleJson: true,
+      noPlaylist: true,
+      noWarnings: true,
+      quiet: true,
+    })
 
-    res.header('Content-Disposition', `attachment; filename="${encodeURIComponent(title)}.${ext}"`)
-    res.header('Content-Type', format.mimeType || 'audio/mpeg')
+    const rawTitle = typeof info === 'object' && info?.title ? String(info.title) : 'audio'
+    const title = rawTitle.replace(/[^\w\s\u00C0-\u024F().,'!&-]/gi, '').trim() || 'audio'
 
-    ytdl(videoId, { format }).pipe(res)
+    res.header('Content-Disposition', `attachment; filename="${encodeURIComponent(title)}.m4a"`)
+    res.header('Content-Type', 'audio/mp4')
+
+    // Stream audio directly to response
+    const subprocess = youtubeDl.exec(url, {
+      noPlaylist: true,
+      format: 'bestaudio[ext=m4a]/bestaudio/best',
+      output: '-',
+      quiet: true,
+    })
+
+    subprocess.stdout?.pipe(res)
+
+    subprocess.stderr?.on('data', (chunk) => {
+      console.error('[yt-dlp]', chunk.toString().trim())
+    })
+
+    subprocess.on('error', (err) => {
+      console.error('[yt-dlp spawn error]', err.message)
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to download audio' })
+      }
+    })
+
+    req.on('close', () => {
+      subprocess.kill()
+    })
   } catch (err) {
-    res.status(500).json({ error: 'Failed to download audio' })
+    console.error('[download error]', err?.message || err)
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to download audio' })
+    }
   }
 })
 

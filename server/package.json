@@ -14,6 +14,7 @@
     "express": "^5.2.1",
     "lrclib-api": "^2.0.4",
     "play-dl": "^1.9.7",
+    "youtube-dl-exec": "^3.1.8",
     "youtubei.js": "^17.2.0",
     "ytmusic-api": "^5.3.1"
   }
