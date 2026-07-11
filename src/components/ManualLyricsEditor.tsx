@@ -198,7 +198,7 @@ export function ManualLyricsEditor({
       const img = new Image()
       img.onload = async () => {
         const canvas = document.createElement('canvas')
-        const maxDim = 480
+        const maxDim = 1080
         let width = img.width
         let height = img.height
 
@@ -211,7 +211,7 @@ export function ManualLyricsEditor({
         canvas.width = width
         canvas.height = height
         canvas.getContext('2d')?.drawImage(img, 0, 0, width, height)
-        const compressed = canvas.toDataURL('image/jpeg', 0.8)
+        const compressed = canvas.toDataURL('image/jpeg', 0.95)
 
         setSaving(true)
         setError('')

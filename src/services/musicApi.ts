@@ -338,6 +338,14 @@ function saveTrackContext(videoId: string, context: unknown) {
   return normalized
 }
 
+export function invalidateTrackContextCache(videoId: string) {
+  const store = readTrackContextCacheStore()
+  if (store && store[videoId]) {
+    delete store[videoId]
+    writeTrackContextCacheStore(store)
+  }
+}
+
 function normalizeArtistProfile(item: unknown, fallbackQuery: string): ArtistProfile | null {
   if (!item || typeof item !== 'object') return null
 
@@ -443,6 +451,8 @@ export async function saveManualLyrics(track: Track | null, lyrics: string[], li
     }),
   })
 
+  invalidateTrackContextCache(videoId)
+
   return {
     lyrics: Array.isArray(data?.item?.lyrics) ? data.item.lyrics.map((line: unknown) => String(line || '').trim()).filter(Boolean) : [],
     syncedLyrics: normalizeSyncedLyrics(data?.item?.lines),
@@ -455,9 +465,11 @@ export async function deleteManualLyrics(videoId: string, baseOverride = '') {
     throw new Error('Thiếu videoId để xóa lời tự canh.')
   }
 
-  return requestViaCandidates(`/api/manual-lyrics?videoId=${encodeURIComponent(id)}`, baseOverride, {
+  const result = await requestViaCandidates(`/api/manual-lyrics?videoId=${encodeURIComponent(id)}`, baseOverride, {
     method: 'DELETE',
   })
+  invalidateTrackContextCache(id)
+  return result
 }
 
 export async function resetManualCover(videoId: string, baseOverride = '') {
@@ -466,9 +478,11 @@ export async function resetManualCover(videoId: string, baseOverride = '') {
     throw new Error('Thiếu videoId để reset ảnh bìa.')
   }
 
-  return requestViaCandidates(`/api/manual-lyrics?videoId=${encodeURIComponent(id)}&mode=thumbnail`, baseOverride, {
+  const result = await requestViaCandidates(`/api/manual-lyrics?videoId=${encodeURIComponent(id)}&mode=thumbnail`, baseOverride, {
     method: 'DELETE',
   })
+  invalidateTrackContextCache(id)
+  return result
 }
 
 export async function resetManualLyrics(videoId: string, baseOverride = '') {
@@ -477,9 +491,11 @@ export async function resetManualLyrics(videoId: string, baseOverride = '') {
     throw new Error('Thiếu videoId để reset lyrics.')
   }
 
-  return requestViaCandidates(`/api/manual-lyrics?videoId=${encodeURIComponent(id)}&mode=lyrics`, baseOverride, {
+  const result = await requestViaCandidates(`/api/manual-lyrics?videoId=${encodeURIComponent(id)}&mode=lyrics`, baseOverride, {
     method: 'DELETE',
   })
+  invalidateTrackContextCache(id)
+  return result
 }
 
 export interface Album {
