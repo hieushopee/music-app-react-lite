@@ -13,11 +13,13 @@ import {
   type LyricSource,
   type SyncedLyricLine,
 } from '../services/musicApi'
-import { usePlayer } from '../store/player'
+import { usePlayer, getCurrentTrack, getEffectiveDuration } from '../store/player'
 
 export function PlayerPage() {
   const state = usePlayer()
-  const { currentTrack, effectiveDuration, actions } = state
+  const { actions } = state
+  const currentTrack = getCurrentTrack(state)
+  const effectiveDuration = getEffectiveDuration(state)
   const [lyrics, setLyrics] = useState<string[]>([])
   const [syncedLyrics, setSyncedLyrics] = useState<SyncedLyricLine[]>([])
   const [lyricSource, setLyricSource] = useState<LyricSource>('none')

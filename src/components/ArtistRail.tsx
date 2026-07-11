@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { fetchArtistProfile, searchMusic, type ArtistProfile } from '../services/musicApi'
-import { usePlayer } from '../store/player'
+import { usePlayer, getCurrentTrack } from '../store/player'
 
 const ARTIST_SHORTCUTS = [
   'Sơn Tùng M-TP',
@@ -60,7 +60,8 @@ export function ArtistRail() {
   const navigate = useNavigate()
   const location = useLocation()
   const state = usePlayer()
-  const { currentTrack, actions } = state
+  const { actions } = state
+  const currentTrack = getCurrentTrack(state)
   const [artists, setArtists] = useState<ArtistProfile[]>([])
   const [loadingArtist, setLoadingArtist] = useState('')
   const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({})

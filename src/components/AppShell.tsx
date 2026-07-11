@@ -1,11 +1,13 @@
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { formatDuration } from '../lib/format'
 import { getCoverStyle } from '../lib/cover'
-import { usePlayer } from '../store/player'
+import { usePlayer, getCurrentTrack, getEffectiveDuration } from '../store/player'
 
 export function AppShell() {
   const state = usePlayer()
-  const { currentTrack, effectiveDuration, actions } = state
+  const { actions } = state
+  const currentTrack = getCurrentTrack(state)
+  const effectiveDuration = getEffectiveDuration(state)
   const navigate = useNavigate()
   const location = useLocation()
 

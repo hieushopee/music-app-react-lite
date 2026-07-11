@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { getConfiguredApiBase, normalizeApiBase, testApiBase } from '../services/musicApi'
-import { usePlayer } from '../store/player'
+import { usePlayer, getCurrentTrack } from '../store/player'
 
 export function SettingsPage() {
   const state = usePlayer()
-  const { currentTrack, actions } = state
+  const { actions } = state
+  const currentTrack = getCurrentTrack(state)
   const [draftBase, setDraftBase] = useState(state.apiBase)
   const [status, setStatus] = useState('')
   const [statusType, setStatusType] = useState<'idle' | 'ok' | 'error'>('idle')

@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { usePlayer } from '../store/player'
+import { usePlayer, getCurrentTrack } from '../store/player'
 import { fetchAlbumDetail } from '../services/musicApi'
 import type { AlbumDetail, Track } from '../services/musicApi'
 import { formatDuration } from '../lib/format'
@@ -9,7 +9,8 @@ export function AlbumPage() {
   const { id } = useParams()
   const navigate = useNavigate()
   const state = usePlayer()
-  const { currentTrack, actions } = state
+  const { actions } = state
+  const currentTrack = getCurrentTrack(state)
   
   const [album, setAlbum] = useState<AlbumDetail | null>(null)
   const [loading, setLoading] = useState(true)

@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useRef } from 'react'
-import { usePlayer } from '../store/player'
+import { usePlayer, getCurrentTrack } from '../store/player'
 import { loadYouTubeApi, type YouTubePlayerApi } from '../services/youtubePlayer'
 
 export function HiddenYouTubePlayer() {
@@ -9,7 +9,8 @@ export function HiddenYouTubePlayer() {
   const intervalRef = useRef<number | null>(null)
   const pendingPlayRef = useRef(false)
   const state = usePlayer()
-  const { currentTrack, actions } = state
+  const { actions } = state
+  const currentTrack = getCurrentTrack(state)
 
   const syncProgress = useEffectEvent(() => {
     const player = playerRef.current

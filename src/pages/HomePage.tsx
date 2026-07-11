@@ -6,7 +6,7 @@ import { SectionBlock } from '../components/SectionBlock'
 import { AlbumCard } from '../components/AlbumCard'
 import { formatDuration } from '../lib/format'
 import { getCoverStyle } from '../lib/cover'
-import { usePlayer } from '../store/player'
+import { usePlayer, getCurrentTrack } from '../store/player'
 
 const quickQueries = ['Nhac tre 2026', 'V-Pop chill', 'US UK acoustic', 'Lofi Viet', 'EDM workout']
 
@@ -40,7 +40,7 @@ function shuffle<T>(array: T[]): T[] {
 
 function CurrentStrip() {
   const navigate = useNavigate()
-  const currentTrack = usePlayer(s => s.currentTrack)
+  const currentTrack = usePlayer(getCurrentTrack)
   const progress = usePlayer(s => s.progress)
   const duration = usePlayer(s => s.duration)
 
@@ -66,7 +66,7 @@ function CurrentStrip() {
 export function HomePage() {
   const navigate = useNavigate()
   const actions = usePlayer(s => s.actions)
-  const currentTrack = usePlayer(s => s.currentTrack)
+  const currentTrack = usePlayer(getCurrentTrack)
   const lastQuery = usePlayer(s => s.lastQuery)
   const apiBase = usePlayer(s => s.apiBase)
   const favorites = usePlayer(s => s.favorites)

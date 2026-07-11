@@ -25,8 +25,6 @@ interface PlayerState {
 }
 
 export interface PlayerStore extends PlayerState {
-  currentTrack: Track | null
-  effectiveDuration: number
   actions: {
     setQueue: (queue: Track[], startIndex?: number, autoplay?: boolean) => void
     playTrack: (track: Track, sourceQueue?: Track[]) => void
@@ -225,11 +223,11 @@ function loadPersistedState(): PlayerState {
   }
 }
 
-function getCurrentTrack(state: PlayerState) {
+export function getCurrentTrack(state: PlayerState) {
   return state.queue[state.currentIndex] ?? null
 }
 
-function getEffectiveDuration(state: PlayerState) {
+export function getEffectiveDuration(state: PlayerState) {
   return state.duration || getCurrentTrack(state)?.duration || 0
 }
 
@@ -291,10 +289,8 @@ function selectIndex(state: PlayerState, index: number, autoplay = state.isPlayi
   }
 }
 
-export const usePlayer = create<PlayerStore>()((set, get) => ({
+export const usePlayer = create<PlayerStore>()((set) => ({
   ...loadPersistedState(),
-  get currentTrack() { return getCurrentTrack(get()) },
-  get effectiveDuration() { return getEffectiveDuration(get()) },
   actions: {
     setQueue(queue, startIndex = 0, autoplay = true) {
       set((previous) => {
