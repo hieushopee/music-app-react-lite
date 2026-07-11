@@ -57,10 +57,7 @@ export function ManualLyricsEditor({
   const [customThumbnail, setCustomThumbnail] = useState('')
   const [resettingCover, setResettingCover] = useState(false)
   const [resettingLyrics, setResettingLyrics] = useState(false)
-  const [editingTimeIndex, setEditingTimeIndex] = useState<number | null>(null)
-  const [editingTimeValue, setEditingTimeValue] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const timeInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!open) return
@@ -76,16 +73,7 @@ export function ManualLyricsEditor({
     setResettingCover(false)
     setResettingLyrics(false)
     setCustomThumbnail('')
-    setEditingTimeIndex(null)
-    setEditingTimeValue('')
   }, [open, initialLines, track?.id])
-
-  useEffect(() => {
-    if (editingTimeIndex !== null && timeInputRef.current) {
-      timeInputRef.current.focus()
-      timeInputRef.current.select()
-    }
-  }, [editingTimeIndex])
 
   const selectedLine = draftLines[selectedIndex] || null
   const missingCount = useMemo(() => draftLines.filter((line) => line.startTime === null).length, [draftLines])
@@ -153,61 +141,15 @@ export function ManualLyricsEditor({
     setError('')
   }
 
-  function handleStartEditTime(index: number) {
-    const line = draftLines[index]
-    setEditingTimeIndex(index)
-    setEditingTimeValue(line.startTime === null ? '' : formatEditorTime(line.startTime))
-  }
-
-  function handleCommitTime() {
-    if (editingTimeIndex === null) return
-
-    const trimmed = editingTimeValue.trim()
-    if (!trimmed) {
-      setEditingTimeIndex(null)
-      setEditingTimeValue('')
-      return
-    }
-
-    const parsed = parseEditorTime(trimmed)
-    if (parsed === null) {
-      setError('Định dạng thời gian không hợp lệ. Dùng MM:SS.T (ví dụ: 01:23.5)')
-      setEditingTimeIndex(null)
-      setEditingTimeValue('')
-      return
-    }
-
+  function handleTickTime(index: number, delta: number) {
     setDraftLines((previous) =>
-      previous.map((line, index) =>
-        index === editingTimeIndex ? { ...line, startTime: roundTime(parsed) } : line
-      )
+      previous.map((line, lineIndex) => {
+        if (lineIndex !== index) return line
+        const base = line.startTime ?? 0
+        return { ...line, startTime: roundTime(Math.max(base + delta, 0)) }
+      })
     )
     setError('')
-    setEditingTimeIndex(null)
-    setEditingTimeValue('')
-  }
-
-  function handleCancelEditTime() {
-    setEditingTimeIndex(null)
-    setEditingTimeValue('')
-  }
-
-  function handleTimeChange(value: string) {
-    setEditingTimeValue(value)
-    if (editingTimeIndex === null) return
-
-    const trimmed = value.trim()
-    if (!trimmed) return
-
-    const parsed = parseEditorTime(trimmed)
-    if (parsed !== null) {
-      setDraftLines((previous) =>
-        previous.map((line, index) =>
-          index === editingTimeIndex ? { ...line, startTime: roundTime(parsed) } : line
-        )
-      )
-      setError('')
-    }
   }
 
   function updateLineText(index: number, text: string) {
@@ -541,11 +483,13 @@ export function ManualLyricsEditor({
             <div className="manual-lyrics-editor__list">
               {draftLines.length ? (
                 draftLines.map((line, index) => (
-                  <button
-                    key={`${line.text}-${index}`}
-                    type="button"
+                  <div
+                    key={index}
                     className={`manual-lyrics-editor__row${index === selectedIndex ? ' is-selected' : ''}${line.startTime !== null ? ' is-complete' : ''}`}
                     onClick={() => setSelectedIndex(index)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') setSelectedIndex(index) }}
                   >
                     <span className="manual-lyrics-editor__row-index">{index + 1}</span>
                     {editMode ? (
@@ -554,42 +498,40 @@ export function ManualLyricsEditor({
                         value={line.text}
                         onChange={(event) => updateLineText(index, event.target.value)}
                         onClick={(event) => event.stopPropagation()}
+                        onKeyDown={(event) => event.stopPropagation()}
                       />
                     ) : (
                       <span className="manual-lyrics-editor__row-text">{line.text}</span>
                     )}
-                    {editingTimeIndex === index ? (
-                      <input
-                        ref={timeInputRef}
-                        className="manual-lyrics-editor__row-time-input"
-                        value={editingTimeValue}
-                        onChange={(event) => handleTimeChange(event.target.value)}
-                        onBlur={handleCommitTime}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault()
-                            handleCommitTime()
-                          } else if (event.key === 'Escape') {
-                            event.preventDefault()
-                            handleCancelEditTime()
-                          }
-                        }}
-                        onClick={(event) => event.stopPropagation()}
-                        placeholder="MM:SS.T"
-                      />
-                    ) : (
+                    <span className="manual-lyrics-editor__row-time-group" onClick={(e) => e.stopPropagation()}>
                       <span
                         className="manual-lyrics-editor__row-time"
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          handleStartEditTime(index)
-                        }}
-                        title="Nhấn để sửa thời gian"
+                        title="Thời gian dòng này"
                       >
                         {line.startTime === null ? '--:--.-' : formatEditorTime(line.startTime)}
                       </span>
-                    )}
-                  </button>
+                      <span className="manual-lyrics-editor__row-tick-stack">
+                        <button
+                          type="button"
+                          className="manual-lyrics-editor__row-tick"
+                          title="Tăng 1 tích tắc (+0.1s)"
+                          onClick={() => handleTickTime(index, 0.1)}
+                          tabIndex={-1}
+                        >
+                          ▲
+                        </button>
+                        <button
+                          type="button"
+                          className="manual-lyrics-editor__row-tick"
+                          title="Giảm 1 tích tắc (−0.1s)"
+                          onClick={() => handleTickTime(index, -0.1)}
+                          tabIndex={-1}
+                        >
+                          ▼
+                        </button>
+                      </span>
+                    </span>
+                  </div>
                 ))
               ) : (
                 <div className="manual-lyrics-editor__empty">Chưa có lyrics cho bài này. Bấm `Thêm lyrics` để dán toàn bộ bài.</div>

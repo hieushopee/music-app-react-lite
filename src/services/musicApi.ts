@@ -355,6 +355,18 @@ export async function searchMusic(query: string, baseOverride = '') {
   return normalizeTrackList(data?.items)
 }
 
+export async function getSearchSuggestions(query: string, baseOverride = ''): Promise<string[]> {
+  const keyword = String(query || '').trim()
+  if (!keyword) return []
+
+  try {
+    const data = await requestViaCandidates(`/api/suggest?q=${encodeURIComponent(keyword)}`, baseOverride)
+    return Array.isArray(data?.items) ? data.items : []
+  } catch {
+    return []
+  }
+}
+
 export async function fetchTrackContext(track: Track | null, baseOverride = ''): Promise<TrackContext> {
   const videoId = String(track?.id || '').trim()
   if (!videoId) {

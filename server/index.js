@@ -412,6 +412,21 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, source: 'ytmusic' })
 })
 
+app.get('/api/suggest', async (req, res) => {
+  const query = String(req.query.q || '').trim()
+  if (!query) {
+    return res.status(400).json({ error: 'Missing q parameter' })
+  }
+
+  try {
+    await ensureYtMusic()
+    const suggestions = await ytmusic.getSearchSuggestions(query)
+    res.json({ items: suggestions || [] })
+  } catch (error) {
+    res.status(500).json({ error: 'YT Music API suggest error' })
+  }
+})
+
 app.get('/api/search', async (req, res) => {
   const query = String(req.query.q || '').trim()
   if (!query) {

@@ -1,7 +1,7 @@
 import { startTransition, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Track, Album } from '../services/musicApi'
-import { searchMusic, searchAlbums } from '../services/musicApi'
+import { searchMusic, searchAlbums, getSearchSuggestions } from '../services/musicApi'
 import { SectionBlock } from '../components/SectionBlock'
 import { AlbumCard } from '../components/AlbumCard'
 import { formatDuration } from '../lib/format'
@@ -44,6 +44,7 @@ export function HomePage() {
   const [query, setQuery] = useState(state.lastQuery)
   const [isSearching, setIsSearching] = useState(false)
   const [searchError, setSearchError] = useState('')
+  const [suggestions, setSuggestions] = useState<string[]>([])
   const [sections, setSections] = useState<Record<string, Track[]>>({})
   const [loadingSections, setLoadingSections] = useState(true)
   const [sectionsError, setSectionsError] = useState('')
@@ -56,6 +57,20 @@ export function HomePage() {
   useEffect(() => {
     setQuery(state.lastQuery)
   }, [state.lastQuery])
+
+  // Debounced suggestions
+  useEffect(() => {
+    const trimmed = query.trim()
+    if (!trimmed) {
+      setSuggestions([])
+      return
+    }
+    const timer = setTimeout(async () => {
+      const results = await getSearchSuggestions(trimmed, state.apiBase)
+      setSuggestions(results)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [query, state.apiBase])
 
   useEffect(() => {
     let cancelled = false
@@ -215,10 +230,9 @@ export function HomePage() {
       <section className="hero-panel">
         <div className="hero-copy">
           <span>Trình phát nhạc thế hệ mới</span>
-          <h2>Không gian âm nhạc tối giản &amp; thuần khiết.</h2>
+          <h2>Trải nghiệm âm nhạc không giới hạn.</h2>
           <p>
-            Tận hưởng hàng triệu bài hát với chất lượng cao nhất, giao diện tập trung hoàn toàn vào cảm xúc và nghệ thuật của
-            người nghệ sĩ.
+            Khám phá kho nhạc khổng lồ với hàng triệu bài hát. Tận hưởng không gian nghe nhạc mượt mà, tối giản và hoàn toàn tập trung vào cảm xúc của riêng bạn.
           </p>
 
           <form
@@ -240,19 +254,49 @@ export function HomePage() {
           </form>
 
           <div className="chip-row">
-            {quickQueries.map((chip) => (
-              <button
-                key={chip}
-                type="button"
-                className="query-chip"
-                onClick={() => {
-                  setQuery(chip)
-                  handleSearch(chip)
-                }}
-              >
-                {chip}
-              </button>
-            ))}
+            {query.trim()
+              ? suggestions.map((chip) => (
+                  <button
+                    key={chip}
+                    type="button"
+                    className="query-chip"
+                    onClick={() => {
+                      setQuery(chip)
+                      handleSearch(chip)
+                    }}
+                  >
+                    {chip}
+                  </button>
+                ))
+              : state.recentSearches.length > 0
+                ? state.recentSearches.map((chip) => (
+                    <button
+                      key={chip}
+                      type="button"
+                      className="query-chip recent-chip"
+                      onClick={() => {
+                        setQuery(chip)
+                        handleSearch(chip)
+                      }}
+                    >
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+                      {chip}
+                    </button>
+                  ))
+                : quickQueries.map((chip) => (
+                    <button
+                      key={chip}
+                      type="button"
+                      className="query-chip"
+                      onClick={() => {
+                        setQuery(chip)
+                        handleSearch(chip)
+                      }}
+                    >
+                      {chip}
+                    </button>
+                  ))
+            }
           </div>
 
           {searchError ? <p className="feedback error">{searchError}</p> : null}
@@ -261,16 +305,16 @@ export function HomePage() {
 
         <div className="hero-status">
           <div className="status-card">
-            <span>Đang chờ</span>
-            <strong>{state.queue.length} bài</strong>
+            <span>Nghe gần đây</span>
+            <strong>{state.history.length} bài</strong>
           </div>
           <div className="status-card">
             <span>Yêu thích</span>
             <strong>{state.favorites.length} bài</strong>
           </div>
           <div className="status-card">
-            <span>Đã nghe</span>
-            <strong>{state.history.length} bài</strong>
+            <span>Đang chờ</span>
+            <strong>{state.queue.length} bài</strong>
           </div>
         </div>
       </section>

@@ -63,6 +63,7 @@ export function ArtistRail() {
   const [artists, setArtists] = useState<ArtistProfile[]>([])
   const [loadingArtist, setLoadingArtist] = useState('')
   const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({})
+  const [tooltip, setTooltip] = useState<{ name: string; y: number } | null>(null)
 
   const artistQueries = useMemo(() => {
     const dynamicArtists = collectArtistQueries([
@@ -160,6 +161,11 @@ export function ArtistRail() {
               className={`artist-rail__button${isActive ? ' is-active' : ''}${isCurrent ? ' is-current' : ''}${isLoading ? ' is-loading' : ''}`}
               onClick={() => handleArtistSelect(artist)}
               aria-label={`Mở nhạc của ${artist.name}`}
+              onMouseEnter={(e) => {
+                const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
+                setTooltip({ name: artist.name, y: rect.top + rect.height / 2 })
+              }}
+              onMouseLeave={() => setTooltip(null)}
             >
               <span className="artist-rail__avatar">
                 <img
@@ -176,13 +182,21 @@ export function ArtistRail() {
                 />
               </span>
 
-              <span className="custom-tooltip">{artist.name}</span>
-
               {isCurrent ? <span className="artist-rail__pulse" aria-hidden="true" /> : null}
             </button>
           )
         })}
       </div>
+
+      {tooltip ? (
+        <div
+          className="artist-rail__tooltip"
+          style={{ top: tooltip.y }}
+          aria-hidden="true"
+        >
+          {tooltip.name}
+        </div>
+      ) : null}
     </aside>
   )
 }

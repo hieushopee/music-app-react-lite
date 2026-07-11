@@ -18,6 +18,7 @@ interface PlayerState {
   history: Track[]
   lastQuery: string
   lastResults: Track[]
+  recentSearches: string[]
   pendingSeek: number | null
   apiBase: string
   lyricOffsets: Record<string, number>
@@ -178,6 +179,7 @@ function getDefaultState(): PlayerState {
     history: [],
     lastQuery: '',
     lastResults: [],
+    recentSearches: [],
     pendingSeek: null,
     apiBase: '',
     lyricOffsets: {},
@@ -208,6 +210,9 @@ function loadPersistedState(): PlayerState {
       history: normalizeTrackList(parsed?.history).slice(0, MAX_HISTORY),
       lastQuery: typeof parsed?.lastQuery === 'string' ? parsed.lastQuery : '',
       lastResults: normalizeTrackList(parsed?.lastResults),
+      recentSearches: Array.isArray(parsed?.recentSearches)
+        ? parsed.recentSearches.filter((s: unknown) => typeof s === 'string' && s.trim()).slice(0, 10)
+        : [],
       pendingSeek: null,
       apiBase: normalizeApiBase(parsed?.apiBase),
       lyricOffsets: normalizeLyricOffsets(parsed?.lyricOffsets),
@@ -308,6 +313,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       history: state.history,
       lastQuery: state.lastQuery,
       lastResults: state.lastResults,
+      recentSearches: state.recentSearches,
       apiBase: state.apiBase,
       lyricOffsets: state.lyricOffsets,
     }
@@ -324,6 +330,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     state.history,
     state.lastQuery,
     state.lastResults,
+    state.recentSearches,
     state.apiBase,
     state.lyricOffsets,
   ])
@@ -527,11 +534,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       })
     },
     setLastSearch(query, items) {
-      setState((previous) => ({
-        ...previous,
-        lastQuery: String(query || '').trim(),
-        lastResults: normalizeTrackList(items).slice(0, 24),
-      }))
+      setState((previous) => {
+        const trimmed = String(query || '').trim()
+        const updatedRecent = trimmed
+          ? [trimmed, ...previous.recentSearches.filter((s) => s !== trimmed)].slice(0, 10)
+          : previous.recentSearches
+        return {
+          ...previous,
+          lastQuery: trimmed,
+          lastResults: normalizeTrackList(items).slice(0, 24),
+          recentSearches: updatedRecent,
+        }
+      })
     },
     clearHistory() {
       setState((previous) => ({ ...previous, history: [] }))
