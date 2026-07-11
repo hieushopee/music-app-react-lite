@@ -17,6 +17,27 @@ const serverDir = path.dirname(fileURLToPath(import.meta.url))
 const dataDir = path.join(serverDir, 'data')
 const manualLyricsPath = path.join(dataDir, 'manual-lyrics.json')
 const frontendDist = path.join(serverDir, '..', 'dist')
+const cookieFile = path.join(serverDir, 'yt-cookies.txt')
+
+// Write YouTube cookies from env var to disk (for cloud deployments)
+async function initCookies() {
+  const cookieContent = process.env.YT_COOKIES || ''
+  if (cookieContent.trim()) {
+    try {
+      await fs.writeFile(cookieFile, cookieContent, 'utf-8')
+      console.log('[cookies] YouTube cookie file written.')
+    } catch (err) {
+      console.warn('[cookies] Failed to write cookie file:', err.message)
+    }
+  }
+}
+
+// Returns extra yt-dlp options for cookie auth if cookie file exists
+function cookieOpts() {
+  const content = process.env.YT_COOKIES || ''
+  if (!content.trim()) return {}
+  return { cookies: cookieFile }
+}
 
 app.use(cors())
 app.use(express.json({ limit: '1mb' }))
@@ -740,6 +761,7 @@ app.get('/api/download', async (req, res) => {
       noPlaylist: true,
       noWarnings: true,
       quiet: true,
+      ...cookieOpts(),
     })
 
     const rawTitle = typeof info === 'object' && info?.title ? String(info.title) : 'audio'
@@ -756,6 +778,7 @@ app.get('/api/download', async (req, res) => {
       ffmpegLocation: ffmpegPath,
       output: '-',
       quiet: true,
+      ...cookieOpts(),
     })
 
     subprocess.stdout?.pipe(res)
@@ -798,6 +821,7 @@ app.post('/api/save-local', async (req, res) => {
       noPlaylist: true,
       noWarnings: true,
       quiet: true,
+      ...cookieOpts(),
     })
 
     const rawTitle = typeof info === 'object' && info?.title ? String(info.title) : 'audio'
@@ -814,6 +838,7 @@ app.post('/api/save-local', async (req, res) => {
       ffmpegLocation: ffmpegPath,
       output: fullPath,
       quiet: true,
+      ...cookieOpts(),
     })
 
     res.json({ success: true, path: fullPath })
@@ -825,6 +850,7 @@ app.post('/api/save-local', async (req, res) => {
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`YT Music API listening on http://0.0.0.0:${port}`)
+  initCookies()
 })
 
 // Prevent unhandled errors from crashing the process
