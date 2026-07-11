@@ -773,6 +773,7 @@ app.get('/api/download', async (req, res) => {
     // Stream audio directly to response
     const subprocess = youtubeDl.exec(url, {
       noPlaylist: true,
+      format: 'bestaudio/best',
       extractAudio: true,
       audioFormat: 'mp3',
       ffmpegLocation: ffmpegPath,
@@ -849,6 +850,7 @@ app.post('/api/save-local', async (req, res) => {
 
     await youtubeDl(url, {
       noPlaylist: true,
+      format: 'bestaudio/best',
       extractAudio: true,
       audioFormat: 'mp3',
       ffmpegLocation: ffmpegPath,
