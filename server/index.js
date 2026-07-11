@@ -7,6 +7,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ytdl from '@distube/ytdl-core'
+import playdl from 'play-dl'
 
 dotenv.config()
 
@@ -732,46 +733,62 @@ app.get('/api/download', async (req, res) => {
 
   const url = `https://www.youtube.com/watch?v=${videoId}`
 
-  try {
-    const info = await ytdl.getBasicInfo(url)
-    const rawTitle = info?.videoDetails?.title || 'audio'
-    const title = rawTitle.replace(/[/\\:*?"<>|]/g, '').trim() || 'audio'
-
-    // Pick best audio-only format
-    const format = ytdl.chooseFormat(info.formats, {
-      quality: 'highestaudio',
-      filter: 'audioonly',
-    })
-
-    const ext = format?.container || 'mp4'
+  // Helper to pipe a readable stream to response
+  function pipeStream(readable, title, ext, contentLength) {
     const mimeType = ext === 'webm' ? 'audio/webm' : 'audio/mp4'
-
     res.header('Content-Disposition', `attachment; filename="${encodeURIComponent(title)}.${ext}"`)
     res.header('Content-Type', mimeType)
-    if (format?.contentLength) {
-      res.header('Content-Length', format.contentLength)
-    }
+    if (contentLength) res.header('Content-Length', String(contentLength))
 
-    const stream = ytdl.downloadFromInfo(info, { format })
-
-    stream.on('error', (err) => {
-      console.error('[ytdl stream error]', err.message)
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to stream audio' })
-      }
+    readable.on('error', (err) => {
+      console.error('[download stream error]', err.message)
+      if (!res.headersSent) res.status(500).json({ error: 'Stream error' })
     })
 
-    req.on('close', () => stream.destroy())
+    req.on('close', () => {
+      try { readable.destroy?.() } catch {}
+    })
 
-    stream.pipe(res)
+    readable.pipe(res)
+  }
+
+  // --- Strategy 1: play-dl (no binary, generally more stable) ---
+  try {
+    const info = await playdl.video_basic_info(url)
+    const title = (info?.video_details?.title || 'audio').replace(/[/\\:*?"<>|]/g, '').trim() || 'audio'
+    const audioStream = await playdl.stream(url, { quality: 0 })
+    pipeStream(audioStream.stream, title, audioStream.type === 'opus' ? 'webm' : 'mp4', null)
+    return
   } catch (err) {
-    console.error('[download error]', err?.message || err)
+    console.warn('[download] play-dl failed, trying ytdl-core:', err.message)
+  }
+
+  // --- Strategy 2: ytdl-core fallback ---
+  try {
+    const info = await ytdl.getBasicInfo(url)
+    const title = (info?.videoDetails?.title || 'audio').replace(/[/\\:*?"<>|]/g, '').trim() || 'audio'
+    const format = ytdl.chooseFormat(info.formats, { quality: 'highestaudio', filter: 'audioonly' })
+    const ext = format?.container || 'mp4'
+    const stream = ytdl.downloadFromInfo(info, { format })
+    pipeStream(stream, title, ext, format?.contentLength)
+    return
+  } catch (err) {
+    console.error('[download] ytdl-core also failed:', err.message)
     if (!res.headersSent) {
-      res.status(500).json({ error: 'Failed to download audio' })
+      res.status(502).json({ error: 'Không thể tải audio. YouTube có thể đang chặn yêu cầu.' })
     }
   }
 })
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`YT Music API listening on http://0.0.0.0:${port}`)
+})
+
+// Prevent unhandled errors from crashing the process
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err.message)
+})
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason instanceof Error ? reason.message : reason)
 })
