@@ -761,6 +761,8 @@ app.get('/api/download', async (req, res) => {
       noPlaylist: true,
       noWarnings: true,
       quiet: true,
+      format: 'bestaudio/best',
+      extractorArgs: 'youtube:player_client=android,web',
       ...cookieOpts(),
     })
 
@@ -779,6 +781,7 @@ app.get('/api/download', async (req, res) => {
       ffmpegLocation: ffmpegPath,
       output: '-',
       quiet: true,
+      extractorArgs: 'youtube:player_client=android,web',
       ...cookieOpts(),
     })
 
@@ -799,9 +802,13 @@ app.get('/api/download', async (req, res) => {
       try { subprocess.kill() } catch {}
     })
   } catch (err) {
-    console.error('[download error]', err?.message || err)
+    const msg = err?.message || String(err)
+    console.error('[download error]', msg)
     if (!res.headersSent) {
-      res.status(502).json({ error: 'Không thể tải audio. Thử lại sau.' })
+      res.status(502).json({ 
+        error: 'Không thể tải audio. Thử lại sau.',
+        details: msg 
+      })
     }
   }
 })
@@ -838,6 +845,8 @@ app.post('/api/save-local', async (req, res) => {
       noPlaylist: true,
       noWarnings: true,
       quiet: true,
+      format: 'bestaudio/best',
+      extractorArgs: 'youtube:player_client=android,web',
       ...cookieOpts(),
     })
 
@@ -856,6 +865,7 @@ app.post('/api/save-local', async (req, res) => {
       ffmpegLocation: ffmpegPath,
       output: fullPath,
       quiet: true,
+      extractorArgs: 'youtube:player_client=android,web',
       ...cookieOpts(),
     })
 
