@@ -762,7 +762,6 @@ app.get('/api/download', async (req, res) => {
       noWarnings: true,
       quiet: true,
       format: 'bestaudio/best',
-      extractorArgs: 'youtube:player_client=android,web',
       ...cookieOpts(),
     })
 
@@ -781,7 +780,6 @@ app.get('/api/download', async (req, res) => {
       ffmpegLocation: ffmpegPath,
       output: '-',
       quiet: true,
-      extractorArgs: 'youtube:player_client=android,web',
       ...cookieOpts(),
     })
 
@@ -846,7 +844,6 @@ app.post('/api/save-local', async (req, res) => {
       noWarnings: true,
       quiet: true,
       format: 'bestaudio/best',
-      extractorArgs: 'youtube:player_client=android,web',
       ...cookieOpts(),
     })
 
@@ -865,7 +862,6 @@ app.post('/api/save-local', async (req, res) => {
       ffmpegLocation: ffmpegPath,
       output: fullPath,
       quiet: true,
-      extractorArgs: 'youtube:player_client=android,web',
       ...cookieOpts(),
     })
 
