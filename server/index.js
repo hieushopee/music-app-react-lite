@@ -6,7 +6,7 @@ import lrclibApi from 'lrclib-api'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import youtubeDl from 'youtube-dl-exec'
+import ytdl from '@distube/ytdl-core'
 
 dotenv.config()
 
@@ -733,44 +733,37 @@ app.get('/api/download', async (req, res) => {
   const url = `https://www.youtube.com/watch?v=${videoId}`
 
   try {
-    // Get title first
-    const info = await youtubeDl(url, {
-      dumpSingleJson: true,
-      noPlaylist: true,
-      noWarnings: true,
-      quiet: true,
+    const info = await ytdl.getBasicInfo(url)
+    const rawTitle = info?.videoDetails?.title || 'audio'
+    const title = rawTitle.replace(/[/\\:*?"<>|]/g, '').trim() || 'audio'
+
+    // Pick best audio-only format
+    const format = ytdl.chooseFormat(info.formats, {
+      quality: 'highestaudio',
+      filter: 'audioonly',
     })
 
-    const rawTitle = typeof info === 'object' && info?.title ? String(info.title) : 'audio'
-    const title = rawTitle.replace(/[^\w\s\u00C0-\u024F().,'!&-]/gi, '').trim() || 'audio'
+    const ext = format?.container || 'mp4'
+    const mimeType = ext === 'webm' ? 'audio/webm' : 'audio/mp4'
 
-    res.header('Content-Disposition', `attachment; filename="${encodeURIComponent(title)}.m4a"`)
-    res.header('Content-Type', 'audio/mp4')
+    res.header('Content-Disposition', `attachment; filename="${encodeURIComponent(title)}.${ext}"`)
+    res.header('Content-Type', mimeType)
+    if (format?.contentLength) {
+      res.header('Content-Length', format.contentLength)
+    }
 
-    // Stream audio directly to response
-    const subprocess = youtubeDl.exec(url, {
-      noPlaylist: true,
-      format: 'bestaudio[ext=m4a]/bestaudio/best',
-      output: '-',
-      quiet: true,
-    })
+    const stream = ytdl.downloadFromInfo(info, { format })
 
-    subprocess.stdout?.pipe(res)
-
-    subprocess.stderr?.on('data', (chunk) => {
-      console.error('[yt-dlp]', chunk.toString().trim())
-    })
-
-    subprocess.on('error', (err) => {
-      console.error('[yt-dlp spawn error]', err.message)
+    stream.on('error', (err) => {
+      console.error('[ytdl stream error]', err.message)
       if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to download audio' })
+        res.status(500).json({ error: 'Failed to stream audio' })
       }
     })
 
-    req.on('close', () => {
-      subprocess.kill()
-    })
+    req.on('close', () => stream.destroy())
+
+    stream.pipe(res)
   } catch (err) {
     console.error('[download error]', err?.message || err)
     if (!res.headersSent) {

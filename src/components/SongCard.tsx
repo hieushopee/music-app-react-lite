@@ -1,8 +1,8 @@
 import type { Track } from '../services/musicApi'
-import { getConfiguredApiBase } from '../services/musicApi'
 import { getCoverStyle } from '../lib/cover'
 import { useLazyBackground } from '../lib/useLazyBackground'
 import { formatDuration } from '../lib/format'
+import { usePlayer } from '../store/player'
 
 interface SongCardProps {
   track: Track
@@ -15,6 +15,7 @@ interface SongCardProps {
 export function SongCard({ track, isActive, isFavorite, onPlay, onToggleFavorite }: SongCardProps) {
   const { ref, isVisible } = useLazyBackground(track.thumbnail)
   const coverStyle = isVisible ? getCoverStyle(track.thumbnail) : {}
+  const apiBase = usePlayer(s => s.apiBase)
 
   return (
     <article className={`song-card${isActive ? ' is-active' : ''}`}>
@@ -40,7 +41,7 @@ export function SongCard({ track, isActive, isFavorite, onPlay, onToggleFavorite
           {isFavorite ? 'Đã thích' : 'Yêu thích'}
         </button>
         <a 
-          href={`${getConfiguredApiBase()}/api/download?videoId=${track.id}`}
+          href={`${apiBase || ''}/api/download?videoId=${track.id}`}
           target="_blank"
           rel="noopener noreferrer"
           className="action-chip action-chip--icon" 
