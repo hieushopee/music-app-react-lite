@@ -22,7 +22,6 @@ interface PlayerState {
   pendingSeek: number | null
   apiBase: string
   lyricOffsets: Record<string, number>
-  localDownloadPath: string
 }
 
 export interface PlayerStore extends PlayerState {
@@ -51,7 +50,6 @@ export interface PlayerStore extends PlayerState {
     nudgeLyricOffset: (trackId: string, delta: number) => void
     resetLyricOffset: (trackId: string) => void
     updateTrack: (trackId: string, partial: Partial<Track>) => void
-    setLocalDownloadPath: (path: string) => void
   }
 }
 
@@ -180,7 +178,6 @@ function getDefaultState(): PlayerState {
     pendingSeek: null,
     apiBase: '',
     lyricOffsets: {},
-    localDownloadPath: '',
   }
 }
 
@@ -214,7 +211,6 @@ function loadPersistedState(): PlayerState {
       pendingSeek: null,
       apiBase: normalizeApiBase(parsed?.apiBase),
       lyricOffsets: normalizeLyricOffsets(parsed?.lyricOffsets),
-      localDownloadPath: typeof parsed?.localDownloadPath === 'string' ? parsed.localDownloadPath : '',
     }
 
     if (nextState.currentIndex >= nextState.queue.length) {
@@ -538,9 +534,6 @@ export const usePlayer = create<PlayerStore>()((set) => ({
         }
       })
     },
-    setLocalDownloadPath(path: string) {
-      set({ localDownloadPath: String(path || '').trim() })
-    },
   }
 }))
 
@@ -560,7 +553,6 @@ if (typeof window !== 'undefined') {
       recentSearches: state.recentSearches,
       apiBase: state.apiBase,
       lyricOffsets: state.lyricOffsets,
-      localDownloadPath: state.localDownloadPath,
     }
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
   })

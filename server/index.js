@@ -6,8 +6,6 @@ import lrclibApi from 'lrclib-api'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import youtubeDl from 'youtube-dl-exec'
-import ffmpegPath from 'ffmpeg-static'
 
 dotenv.config()
 
@@ -17,27 +15,6 @@ const serverDir = path.dirname(fileURLToPath(import.meta.url))
 const dataDir = path.join(serverDir, 'data')
 const manualLyricsPath = path.join(dataDir, 'manual-lyrics.json')
 const frontendDist = path.join(serverDir, '..', 'dist')
-const cookieFile = path.join(serverDir, 'yt-cookies.txt')
-
-// Write YouTube cookies from env var to disk (for cloud deployments)
-async function initCookies() {
-  const cookieContent = process.env.YT_COOKIES || ''
-  if (cookieContent.trim()) {
-    try {
-      await fs.writeFile(cookieFile, cookieContent, 'utf-8')
-      console.log('[cookies] YouTube cookie file written.')
-    } catch (err) {
-      console.warn('[cookies] Failed to write cookie file:', err.message)
-    }
-  }
-}
-
-// Returns extra yt-dlp options for cookie auth if cookie file exists
-function cookieOpts() {
-  const content = process.env.YT_COOKIES || ''
-  if (!content.trim()) return {}
-  return { cookies: cookieFile }
-}
 
 app.use(cors())
 app.use(express.json({ limit: '1mb' }))
@@ -746,135 +723,8 @@ app.get('/api/album/:id', async (req, res) => {
   }
 })
 
-app.get('/api/download', async (req, res) => {
-  const videoId = String(req.query.videoId || '').trim()
-  if (!videoId) {
-    return res.status(400).json({ error: 'Missing videoId parameter' })
-  }
-
-  const url = `https://www.youtube.com/watch?v=${videoId}`
-
-  try {
-    // Get title first
-    const info = await youtubeDl(url, {
-      dumpSingleJson: true,
-      noPlaylist: true,
-      noWarnings: true,
-      quiet: true,
-      format: 'bestaudio/best',
-      ...cookieOpts(),
-    })
-
-    const rawTitle = typeof info === 'object' && info?.title ? String(info.title) : 'audio'
-    const title = rawTitle.replace(/[^\w\s\u00C0-\u024F().,'!&-]/gi, '').trim() || 'audio'
-
-    res.header('Content-Disposition', `attachment; filename="${encodeURIComponent(title)}.mp3"`)
-    res.header('Content-Type', 'audio/mpeg')
-
-    // Stream audio directly to response
-    const subprocess = youtubeDl.exec(url, {
-      noPlaylist: true,
-      format: 'bestaudio/best',
-      extractAudio: true,
-      audioFormat: 'mp3',
-      ffmpegLocation: ffmpegPath,
-      output: '-',
-      quiet: true,
-      ...cookieOpts(),
-    })
-
-    subprocess.stdout?.pipe(res)
-
-    subprocess.stderr?.on('data', (chunk) => {
-      console.error('[yt-dlp]', chunk.toString().trim())
-    })
-
-    subprocess.on('error', (err) => {
-      console.error('[yt-dlp spawn error]', err.message)
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to stream audio' })
-      }
-    })
-
-    req.on('close', () => {
-      try { subprocess.kill() } catch {}
-    })
-  } catch (err) {
-    const msg = err?.message || String(err)
-    console.error('[download error]', msg)
-    if (!res.headersSent) {
-      res.status(502).json({ 
-        error: 'Không thể tải audio. Thử lại sau.',
-        details: msg 
-      })
-    }
-  }
-})
-
-app.post('/api/save-local', async (req, res) => {
-  const videoId = String(req.body?.videoId || '').trim()
-  const savePath = String(req.body?.savePath || '').trim()
-  
-  if (!videoId || !savePath) {
-    return res.status(400).json({ error: 'Missing videoId or savePath' })
-  }
-
-  // Check if directory exists on THIS server
-  try {
-    const stat = await fs.stat(savePath)
-    if (!stat.isDirectory()) {
-      return res.status(400).json({ 
-        error: `Đường dẫn "${savePath}" không phải thư mục trên server này.`,
-        code: 'PATH_NOT_FOUND'
-      })
-    }
-  } catch {
-    return res.status(400).json({ 
-      error: `Thư mục "${savePath}" không tồn tại trên server này. Tính năng lưu local chỉ hoạt động khi chạy server tại máy của bạn.`,
-      code: 'PATH_NOT_FOUND'
-    })
-  }
-
-  const url = `https://www.youtube.com/watch?v=${videoId}`
-  
-  try {
-    const info = await youtubeDl(url, {
-      dumpSingleJson: true,
-      noPlaylist: true,
-      noWarnings: true,
-      quiet: true,
-      format: 'bestaudio/best',
-      ...cookieOpts(),
-    })
-
-    const rawTitle = typeof info === 'object' && info?.title ? String(info.title) : 'audio'
-    // Clean title for file path
-    const title = rawTitle.replace(/[/\\?%*:|"<>]/g, '-').trim() || 'audio'
-    const fullPath = path.join(savePath, `${title}.mp3`)
-
-    console.log(`[save-local] Downloading ${videoId} to ${fullPath}`)
-
-    await youtubeDl(url, {
-      noPlaylist: true,
-      format: 'bestaudio/best',
-      extractAudio: true,
-      audioFormat: 'mp3',
-      ffmpegLocation: ffmpegPath,
-      output: fullPath,
-      quiet: true,
-      ...cookieOpts(),
-    })
-
-    res.json({ success: true, path: fullPath })
-  } catch (err) {
-    console.error('[save-local error]', err?.message || err)
-    res.status(500).json({ error: 'Lỗi tải xuống local.' })
-  }
-})
-
 app.listen(port, '0.0.0.0', () => {
   console.log(`YT Music API listening on http://0.0.0.0:${port}`)
-  initCookies()
 })
 
 // Prevent unhandled errors from crashing the process
