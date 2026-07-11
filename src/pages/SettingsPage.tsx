@@ -10,10 +10,17 @@ export function SettingsPage() {
   const [status, setStatus] = useState('')
   const [statusType, setStatusType] = useState<'idle' | 'ok' | 'error'>('idle')
   const [checking, setChecking] = useState(false)
+  
+  const [draftDownloadPath, setDraftDownloadPath] = useState(state.localDownloadPath)
+  const [pathStatus, setPathStatus] = useState('')
 
   useEffect(() => {
     setDraftBase(state.apiBase)
   }, [state.apiBase])
+
+  useEffect(() => {
+    setDraftDownloadPath(state.localDownloadPath)
+  }, [state.localDownloadPath])
 
   const configuredBase = getConfiguredApiBase()
   const activeBase = state.apiBase || configuredBase || '/api'
@@ -60,6 +67,12 @@ export function SettingsPage() {
     setStatus('Đã xóa địa chỉ ghi đè. App sẽ dùng proxy mặc định hoặc biến môi trường.')
   }
 
+  function handleSavePath() {
+    actions.setLocalDownloadPath(draftDownloadPath)
+    setPathStatus('Đã lưu đường dẫn thư mục tải xuống.')
+    setTimeout(() => setPathStatus(''), 3000)
+  }
+
   return (
     <div className="settings-page">
       <section className="settings-card settings-card--wide">
@@ -95,6 +108,44 @@ export function SettingsPage() {
         </div>
 
         {status ? <p className={`feedback ${statusType === 'error' ? 'error' : 'ok'}`}>{status}</p> : null}
+      </section>
+
+      <section className="settings-card settings-card--wide">
+        <span>Tải xuống</span>
+        <h2>Thư mục lưu MP3 trực tiếp (Chỉ hỗ trợ Local Server)</h2>
+        <p>
+          Nếu bạn đang chạy backend server trên chính máy tính của mình (qua lệnh <code>npm run dev</code>), 
+          bạn có thể nhập đường dẫn tuyệt đối tới thư mục bạn muốn lưu file. Khi bấm tải xuống ở Player, 
+          backend sẽ tự động tải file thẳng vào thư mục đó thay vì qua trình duyệt.
+        </p>
+
+        <label className="settings-label" htmlFor="download-path">
+          Đường dẫn thư mục (VD: D:\Nhạc)
+        </label>
+        <input
+          id="download-path"
+          className="settings-input"
+          type="text"
+          value={draftDownloadPath}
+          onChange={(event) => setDraftDownloadPath(event.target.value)}
+          placeholder="C:\Users\Name\Downloads\Music"
+        />
+
+        <div className="settings-actions">
+          <button type="button" className="action-pill" onClick={handleSavePath}>
+            Lưu đường dẫn
+          </button>
+          <button type="button" className="ghost-pill" onClick={() => {
+            setDraftDownloadPath('')
+            actions.setLocalDownloadPath('')
+            setPathStatus('Đã xóa đường dẫn.')
+            setTimeout(() => setPathStatus(''), 3000)
+          }}>
+            Xóa
+          </button>
+        </div>
+
+        {pathStatus ? <p className="feedback ok">{pathStatus}</p> : null}
       </section>
 
       <section className="settings-grid">

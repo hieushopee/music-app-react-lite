@@ -6,8 +6,8 @@ import lrclibApi from 'lrclib-api'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import ytdl from '@distube/ytdl-core'
-import playdl from 'play-dl'
+import youtubeDl from 'youtube-dl-exec'
+import ffmpegPath from 'ffmpeg-static'
 
 dotenv.config()
 
@@ -733,50 +733,93 @@ app.get('/api/download', async (req, res) => {
 
   const url = `https://www.youtube.com/watch?v=${videoId}`
 
-  // Helper to pipe a readable stream to response
-  function pipeStream(readable, title, ext, contentLength) {
-    const mimeType = ext === 'webm' ? 'audio/webm' : 'audio/mp4'
-    res.header('Content-Disposition', `attachment; filename="${encodeURIComponent(title)}.${ext}"`)
-    res.header('Content-Type', mimeType)
-    if (contentLength) res.header('Content-Length', String(contentLength))
+  try {
+    // Get title first
+    const info = await youtubeDl(url, {
+      dumpSingleJson: true,
+      noPlaylist: true,
+      noWarnings: true,
+      quiet: true,
+    })
 
-    readable.on('error', (err) => {
-      console.error('[download stream error]', err.message)
-      if (!res.headersSent) res.status(500).json({ error: 'Stream error' })
+    const rawTitle = typeof info === 'object' && info?.title ? String(info.title) : 'audio'
+    const title = rawTitle.replace(/[^\w\s\u00C0-\u024F().,'!&-]/gi, '').trim() || 'audio'
+
+    res.header('Content-Disposition', `attachment; filename="${encodeURIComponent(title)}.mp3"`)
+    res.header('Content-Type', 'audio/mpeg')
+
+    // Stream audio directly to response
+    const subprocess = youtubeDl.exec(url, {
+      noPlaylist: true,
+      extractAudio: true,
+      audioFormat: 'mp3',
+      ffmpegLocation: ffmpegPath,
+      output: '-',
+      quiet: true,
+    })
+
+    subprocess.stdout?.pipe(res)
+
+    subprocess.stderr?.on('data', (chunk) => {
+      console.error('[yt-dlp]', chunk.toString().trim())
+    })
+
+    subprocess.on('error', (err) => {
+      console.error('[yt-dlp spawn error]', err.message)
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to stream audio' })
+      }
     })
 
     req.on('close', () => {
-      try { readable.destroy?.() } catch {}
+      try { subprocess.kill() } catch {}
+    })
+  } catch (err) {
+    console.error('[download error]', err?.message || err)
+    if (!res.headersSent) {
+      res.status(502).json({ error: 'Không thể tải audio. Thử lại sau.' })
+    }
+  }
+})
+
+app.post('/api/save-local', async (req, res) => {
+  const videoId = String(req.body?.videoId || '').trim()
+  const savePath = String(req.body?.savePath || '').trim()
+  
+  if (!videoId || !savePath) {
+    return res.status(400).json({ error: 'Missing videoId or savePath' })
+  }
+
+  const url = `https://www.youtube.com/watch?v=${videoId}`
+  
+  try {
+    const info = await youtubeDl(url, {
+      dumpSingleJson: true,
+      noPlaylist: true,
+      noWarnings: true,
+      quiet: true,
     })
 
-    readable.pipe(res)
-  }
+    const rawTitle = typeof info === 'object' && info?.title ? String(info.title) : 'audio'
+    // Clean title for file path
+    const title = rawTitle.replace(/[/\\?%*:|"<>]/g, '-').trim() || 'audio'
+    const fullPath = path.join(savePath, `${title}.mp3`)
 
-  // --- Strategy 1: play-dl (no binary, generally more stable) ---
-  try {
-    const info = await playdl.video_basic_info(url)
-    const title = (info?.video_details?.title || 'audio').replace(/[/\\:*?"<>|]/g, '').trim() || 'audio'
-    const audioStream = await playdl.stream(url, { quality: 0 })
-    pipeStream(audioStream.stream, title, audioStream.type === 'opus' ? 'webm' : 'mp4', null)
-    return
-  } catch (err) {
-    console.warn('[download] play-dl failed, trying ytdl-core:', err.message)
-  }
+    console.log(`[save-local] Downloading ${videoId} to ${fullPath}`)
 
-  // --- Strategy 2: ytdl-core fallback ---
-  try {
-    const info = await ytdl.getBasicInfo(url)
-    const title = (info?.videoDetails?.title || 'audio').replace(/[/\\:*?"<>|]/g, '').trim() || 'audio'
-    const format = ytdl.chooseFormat(info.formats, { quality: 'highestaudio', filter: 'audioonly' })
-    const ext = format?.container || 'mp4'
-    const stream = ytdl.downloadFromInfo(info, { format })
-    pipeStream(stream, title, ext, format?.contentLength)
-    return
+    await youtubeDl(url, {
+      noPlaylist: true,
+      extractAudio: true,
+      audioFormat: 'mp3',
+      ffmpegLocation: ffmpegPath,
+      output: fullPath,
+      quiet: true,
+    })
+
+    res.json({ success: true, path: fullPath })
   } catch (err) {
-    console.error('[download] ytdl-core also failed:', err.message)
-    if (!res.headersSent) {
-      res.status(502).json({ error: 'Không thể tải audio. YouTube có thể đang chặn yêu cầu.' })
-    }
+    console.error('[save-local error]', err?.message || err)
+    res.status(500).json({ error: 'Lỗi tải xuống local.' })
   }
 })
 
