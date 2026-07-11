@@ -59,7 +59,8 @@ const SHORT_ARTIST_ALLOWLIST = new Set(['vu'])
 export function ArtistRail() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { state, currentTrack, actions } = usePlayer()
+  const state = usePlayer()
+  const { currentTrack, actions } = state
   const [artists, setArtists] = useState<ArtistProfile[]>([])
   const [loadingArtist, setLoadingArtist] = useState('')
   const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({})

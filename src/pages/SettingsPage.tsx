@@ -3,7 +3,8 @@ import { getConfiguredApiBase, normalizeApiBase, testApiBase } from '../services
 import { usePlayer } from '../store/player'
 
 export function SettingsPage() {
-  const { state, currentTrack, actions } = usePlayer()
+  const state = usePlayer()
+  const { currentTrack, actions } = state
   const [draftBase, setDraftBase] = useState(state.apiBase)
   const [status, setStatus] = useState('')
   const [statusType, setStatusType] = useState<'idle' | 'ok' | 'error'>('idle')

@@ -1,4 +1,4 @@
-import { create } from 'zustand'
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import type { Track } from '../services/musicApi'
 import { normalizeApiBase } from '../services/musicApi'
 
@@ -24,7 +24,8 @@ interface PlayerState {
   lyricOffsets: Record<string, number>
 }
 
-export interface PlayerStore extends PlayerState {
+interface PlayerContextValue {
+  state: PlayerState
   currentTrack: Track | null
   effectiveDuration: number
   actions: {
@@ -59,6 +60,8 @@ const STORAGE_KEY = 'pulseframe-player-state'
 const MAX_HISTORY = 24
 const MAX_LYRIC_OFFSET = 12
 const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2]
+
+const PlayerContext = createContext<PlayerContextValue | null>(null)
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
@@ -291,13 +294,50 @@ function selectIndex(state: PlayerState, index: number, autoplay = state.isPlayi
   }
 }
 
-export const usePlayer = create<PlayerStore>()((set, get) => ({
-  ...loadPersistedState(),
-  get currentTrack() { return getCurrentTrack(get()) },
-  get effectiveDuration() { return getEffectiveDuration(get()) },
-  actions: {
+export function PlayerProvider({ children }: { children: ReactNode }) {
+  const [state, setState] = useState<PlayerState>(() => loadPersistedState())
+  const currentTrack = getCurrentTrack(state)
+  const effectiveDuration = getEffectiveDuration(state)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const payload = {
+      queue: state.queue,
+      currentIndex: state.currentIndex,
+      volume: state.volume,
+      playbackRate: state.playbackRate,
+      shuffle: state.shuffle,
+      repeat: state.repeat,
+      favorites: state.favorites,
+      history: state.history,
+      lastQuery: state.lastQuery,
+      lastResults: state.lastResults,
+      recentSearches: state.recentSearches,
+      apiBase: state.apiBase,
+      lyricOffsets: state.lyricOffsets,
+    }
+
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
+  }, [
+    state.queue,
+    state.currentIndex,
+    state.volume,
+    state.playbackRate,
+    state.shuffle,
+    state.repeat,
+    state.favorites,
+    state.history,
+    state.lastQuery,
+    state.lastResults,
+    state.recentSearches,
+    state.apiBase,
+    state.lyricOffsets,
+  ])
+
+  const actions: PlayerContextValue['actions'] = {
     setQueue(queue, startIndex = 0, autoplay = true) {
-      set((previous) => {
+      setState((previous) => {
         const normalizedQueue = normalizeTrackList(queue)
 
         if (!normalizedQueue.length) {
@@ -326,7 +366,7 @@ export const usePlayer = create<PlayerStore>()((set, get) => ({
       const normalized = normalizeTrack(track)
       if (!normalized) return
 
-      set((previous) => {
+      setState((previous) => {
         if (sourceQueue?.length) {
           const queue = normalizeTrackList(sourceQueue)
           const index = queue.findIndex((item) => item.id === normalized.id)
@@ -359,30 +399,32 @@ export const usePlayer = create<PlayerStore>()((set, get) => ({
       })
     },
     play() {
-      set((previous) => {
+      setState((previous) => {
         if (!getCurrentTrack(previous)) return previous
-        return { isPlaying: true }
+        return { ...previous, isPlaying: true }
       })
     },
     pause() {
-      set({ isPlaying: false })
+      setState((previous) => ({ ...previous, isPlaying: false }))
     },
     toggle() {
-      set((previous) => {
+      setState((previous) => {
         if (!getCurrentTrack(previous)) return previous
-        return { isPlaying: !previous.isPlaying }
+        return { ...previous, isPlaying: !previous.isPlaying }
       })
     },
     setPlaybackRate(value) {
-      set({
+      setState((previous) => ({
+        ...previous,
         playbackRate: normalizePlaybackRate(value),
-      })
+      }))
     },
     next() {
-      set((previous) => {
+      setState((previous) => {
         const nextIndex = getNextIndex(previous)
         if (nextIndex === null) {
           return {
+            ...previous,
             isPlaying: false,
             progress: getEffectiveDuration(previous),
           }
@@ -392,9 +434,10 @@ export const usePlayer = create<PlayerStore>()((set, get) => ({
       })
     },
     previous() {
-      set((previous) => {
+      setState((previous) => {
         if (previous.progress > 4) {
           return {
+            ...previous,
             progress: 0,
             pendingSeek: 0,
           }
@@ -403,6 +446,7 @@ export const usePlayer = create<PlayerStore>()((set, get) => ({
         const previousIndex = getPreviousIndex(previous)
         if (previousIndex === null) {
           return {
+            ...previous,
             progress: 0,
             pendingSeek: 0,
           }
@@ -412,9 +456,10 @@ export const usePlayer = create<PlayerStore>()((set, get) => ({
       })
     },
     handleTrackEnd() {
-      set((previous) => {
+      setState((previous) => {
         if (previous.repeat === 'one') {
           return {
+            ...previous,
             isPlaying: true,
             progress: 0,
             pendingSeek: 0,
@@ -424,6 +469,7 @@ export const usePlayer = create<PlayerStore>()((set, get) => ({
         const nextIndex = getNextIndex(previous)
         if (nextIndex === null) {
           return {
+            ...previous,
             isPlaying: false,
             progress: getEffectiveDuration(previous),
           }
@@ -433,38 +479,42 @@ export const usePlayer = create<PlayerStore>()((set, get) => ({
       })
     },
     seek(value) {
-      set((previous) => {
+      setState((previous) => {
         const duration = getEffectiveDuration(previous)
         const nextProgress = clamp(Number(value) || 0, 0, duration)
 
         return {
+          ...previous,
           progress: nextProgress,
           pendingSeek: nextProgress,
         }
       })
     },
     acknowledgeSeek() {
-      set({ pendingSeek: null })
+      setState((previous) => ({ ...previous, pendingSeek: null }))
     },
     syncProgress(current, duration) {
-      set((previous) => ({
+      setState((previous) => ({
+        ...previous,
         progress: clamp(Number(current) || 0, 0, Number(duration) || getEffectiveDuration(previous)),
         duration: Number.isFinite(duration) && duration > 0 ? duration : previous.duration,
       }))
     },
     setPlaying(value) {
-      set({ isPlaying: Boolean(value) })
+      setState((previous) => ({ ...previous, isPlaying: Boolean(value) }))
     },
     setVolume(value) {
-      set({
+      setState((previous) => ({
+        ...previous,
         volume: clamp(Number(value) || 0, 0, 1),
-      })
+      }))
     },
     toggleShuffle() {
-      set((previous) => ({ shuffle: !previous.shuffle }))
+      setState((previous) => ({ ...previous, shuffle: !previous.shuffle }))
     },
     cycleRepeat() {
-      set((previous) => ({
+      setState((previous) => ({
+        ...previous,
         repeat: previous.repeat === 'off' ? 'all' : previous.repeat === 'all' ? 'one' : 'off',
       }))
     },
@@ -472,10 +522,11 @@ export const usePlayer = create<PlayerStore>()((set, get) => ({
       const normalized = normalizeTrack(track)
       if (!normalized) return
 
-      set((previous) => {
+      setState((previous) => {
         const exists = previous.favorites.some((item) => item.id === normalized.id)
 
         return {
+          ...previous,
           favorites: exists
             ? previous.favorites.filter((item) => item.id !== normalized.id)
             : [normalized, ...previous.favorites],
@@ -483,12 +534,13 @@ export const usePlayer = create<PlayerStore>()((set, get) => ({
       })
     },
     setLastSearch(query, items) {
-      set((previous) => {
+      setState((previous) => {
         const trimmed = String(query || '').trim()
         const updatedRecent = trimmed
           ? [trimmed, ...previous.recentSearches.filter((s) => s !== trimmed)].slice(0, 10)
           : previous.recentSearches
         return {
+          ...previous,
           lastQuery: trimmed,
           lastResults: normalizeTrackList(items).slice(0, 24),
           recentSearches: updatedRecent,
@@ -496,41 +548,46 @@ export const usePlayer = create<PlayerStore>()((set, get) => ({
       })
     },
     clearHistory() {
-      set({ history: [] })
+      setState((previous) => ({ ...previous, history: [] }))
     },
     setApiBase(base) {
-      set({
+      setState((previous) => ({
+        ...previous,
         apiBase: normalizeApiBase(base),
-      })
+      }))
     },
     setLyricOffset(trackId, value) {
-      set((previous) => ({
+      setState((previous) => ({
+        ...previous,
         lyricOffsets: updateLyricOffsetMap(previous.lyricOffsets, trackId, value),
       }))
     },
     nudgeLyricOffset(trackId, delta) {
-      set((previous) => {
+      setState((previous) => {
         const id = String(trackId || '').trim()
         if (!id) return previous
 
         return {
+          ...previous,
           lyricOffsets: updateLyricOffsetMap(previous.lyricOffsets, id, (previous.lyricOffsets[id] || 0) + Number(delta || 0)),
         }
       })
     },
     resetLyricOffset(trackId) {
-      set((previous) => ({
+      setState((previous) => ({
+        ...previous,
         lyricOffsets: updateLyricOffsetMap(previous.lyricOffsets, trackId, 0),
       }))
     },
     updateTrack(trackId: string, partial: Partial<Track>) {
-      set((previous) => {
+      setState((previous) => {
         const id = String(trackId || '').trim()
         if (!id) return previous
 
         const updateTrackItem = (item: Track) => (item.id === id ? { ...item, ...partial } : item)
 
         return {
+          ...previous,
           queue: previous.queue.map(updateTrackItem),
           history: previous.history.map(updateTrackItem),
           favorites: previous.favorites.map(updateTrackItem),
@@ -539,30 +596,26 @@ export const usePlayer = create<PlayerStore>()((set, get) => ({
       })
     },
   }
-}))
 
-if (typeof window !== 'undefined') {
-  usePlayer.subscribe((state) => {
-    const payload = {
-      queue: state.queue,
-      currentIndex: state.currentIndex,
-      volume: state.volume,
-      playbackRate: state.playbackRate,
-      shuffle: state.shuffle,
-      repeat: state.repeat,
-      favorites: state.favorites,
-      history: state.history,
-      lastQuery: state.lastQuery,
-      lastResults: state.lastResults,
-      recentSearches: state.recentSearches,
-      apiBase: state.apiBase,
-      lyricOffsets: state.lyricOffsets,
-    }
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
-  })
+  return (
+    <PlayerContext.Provider
+      value={{
+        state,
+        currentTrack,
+        effectiveDuration,
+        actions,
+      }}
+    >
+      {children}
+    </PlayerContext.Provider>
+  )
 }
 
-// Dummy provider to not break main.tsx immediately
-export function PlayerProvider({ children }: { children: import('react').ReactNode }) {
-  return <>{children}</>
+export function usePlayer() {
+  const context = useContext(PlayerContext)
+  if (!context) {
+    throw new Error('usePlayer must be used inside PlayerProvider')
+  }
+
+  return context
 }

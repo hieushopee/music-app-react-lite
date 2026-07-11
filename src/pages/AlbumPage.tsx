@@ -8,7 +8,8 @@ import { formatDuration } from '../lib/format'
 export function AlbumPage() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { state, currentTrack, actions } = usePlayer()
+  const state = usePlayer()
+  const { currentTrack, actions } = state
   
   const [album, setAlbum] = useState<AlbumDetail | null>(null)
   const [loading, setLoading] = useState(true)

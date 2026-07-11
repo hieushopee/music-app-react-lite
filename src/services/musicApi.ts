@@ -37,6 +37,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 8000
 const CONTEXT_REQUEST_TIMEOUT_MS = 20000
 
 let trackContextCacheMemory: Record<string, { savedAt: number; context: TrackContext }> | null = null
+let cachedWorkingBase: string | null = null
 
 function normalizeBase(base: string | undefined | null) {
   return String(base || '').trim().replace(/\/+$/, '')
@@ -130,12 +131,30 @@ async function requestJson(base: string, path: string, options: RequestJsonOptio
 }
 
 async function requestViaCandidates(path: string, baseOverride = '', options: RequestJsonOptions = {}) {
+  // If a working base was already found (and no override given), try it first
+  if (!baseOverride && cachedWorkingBase !== null) {
+    try {
+      const result = await requestJson(cachedWorkingBase, path, options)
+      return result
+    } catch (error) {
+      // If API-level error (e.g. 404), don't re-probe candidates
+      if (error instanceof Error && 'kind' in error && (error as Error & { kind?: string }).kind === 'api') {
+        throw error
+      }
+      // Otherwise cached base failed, clear and fall through to candidate probing
+      cachedWorkingBase = null
+    }
+  }
+
   const candidates = buildCandidates(baseOverride)
   let lastError: Error | null = null
 
   for (const base of candidates) {
     try {
-      return await requestJson(base, path, options)
+      const result = await requestJson(base, path, options)
+      // Cache the base that worked
+      if (!baseOverride) cachedWorkingBase = base
+      return result
     } catch (error) {
       lastError = error instanceof Error ? error : new Error('Không thể kết nối server.')
 

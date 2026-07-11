@@ -4,7 +4,8 @@ import { getCoverStyle } from '../lib/cover'
 import { usePlayer } from '../store/player'
 
 export function AppShell() {
-  const { currentTrack, state, effectiveDuration, actions } = usePlayer()
+  const state = usePlayer()
+  const { currentTrack, effectiveDuration, actions } = state
   const navigate = useNavigate()
   const location = useLocation()
 

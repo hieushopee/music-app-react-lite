@@ -1,6 +1,7 @@
 import type { Track } from '../services/musicApi'
 import { getConfiguredApiBase } from '../services/musicApi'
 import { getCoverStyle } from '../lib/cover'
+import { useLazyBackground } from '../lib/useLazyBackground'
 import { formatDuration } from '../lib/format'
 
 interface SongCardProps {
@@ -12,9 +13,12 @@ interface SongCardProps {
 }
 
 export function SongCard({ track, isActive, isFavorite, onPlay, onToggleFavorite }: SongCardProps) {
+  const { ref, isVisible } = useLazyBackground(track.thumbnail)
+  const coverStyle = isVisible ? getCoverStyle(track.thumbnail) : {}
+
   return (
     <article className={`song-card${isActive ? ' is-active' : ''}`}>
-      <button type="button" className="song-card__cover" onClick={onPlay} style={getCoverStyle(track.thumbnail)}>
+      <button type="button" className="song-card__cover" onClick={onPlay} style={coverStyle} ref={ref as React.RefObject<HTMLButtonElement>}>
         <span className="song-card__play">▶</span>
       </button>
 

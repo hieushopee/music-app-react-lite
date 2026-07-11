@@ -38,9 +38,44 @@ function shuffle<T>(array: T[]): T[] {
   return arr
 }
 
+function CurrentStrip() {
+  const navigate = useNavigate()
+  const currentTrack = usePlayer(s => s.currentTrack)
+  const progress = usePlayer(s => s.progress)
+  const duration = usePlayer(s => s.duration)
+
+  if (!currentTrack) return null
+
+  return (
+    <section className="current-strip">
+      <div className="current-strip__art" style={getCoverStyle(currentTrack.thumbnail)} />
+      <div className="current-strip__meta">
+        <span>Đang phát</span>
+        <h3>{currentTrack.title}</h3>
+        <p>
+          {currentTrack.artist} · {formatDuration(progress)} / {formatDuration(duration || currentTrack.duration)}
+        </p>
+      </div>
+      <button type="button" className="action-pill" onClick={() => navigate('/player')}>
+        Mở player
+      </button>
+    </section>
+  )
+}
+
 export function HomePage() {
   const navigate = useNavigate()
-  const { state, currentTrack, actions } = usePlayer()
+  const actions = usePlayer(s => s.actions)
+  const currentTrack = usePlayer(s => s.currentTrack)
+  const lastQuery = usePlayer(s => s.lastQuery)
+  const apiBase = usePlayer(s => s.apiBase)
+  const favorites = usePlayer(s => s.favorites)
+  const history = usePlayer(s => s.history)
+  const queue = usePlayer(s => s.queue)
+  const recentSearches = usePlayer(s => s.recentSearches)
+  const lastResults = usePlayer(s => s.lastResults)
+  
+  const state = { lastQuery, apiBase, favorites, history, queue, recentSearches, lastResults }
   const [query, setQuery] = useState(state.lastQuery)
   const [isSearching, setIsSearching] = useState(false)
   const [searchError, setSearchError] = useState('')
@@ -319,21 +354,7 @@ export function HomePage() {
         </div>
       </section>
 
-      {currentTrack ? (
-        <section className="current-strip">
-          <div className="current-strip__art" style={getCoverStyle(currentTrack.thumbnail)} />
-          <div className="current-strip__meta">
-            <span>Đang phát</span>
-            <h3>{currentTrack.title}</h3>
-            <p>
-              {currentTrack.artist} · {formatDuration(state.progress)} / {formatDuration(state.duration || currentTrack.duration)}
-            </p>
-          </div>
-          <button type="button" className="action-pill" onClick={() => navigate('/player')}>
-            Mở player
-          </button>
-        </section>
-      ) : null}
+      <CurrentStrip />
 
       {state.lastResults.length ? (
         <SectionBlock

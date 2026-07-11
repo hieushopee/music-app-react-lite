@@ -32,7 +32,8 @@ const ytmusic = new YTMusic()
 const { Client: LRCLibClient, parseLocalLyrics } = lrclibApi
 const lrclib = new LRCLibClient()
 let initPromise = null
-let manualLyricsWritePromise = Promise.resolve()
+let inMemoryStore = null
+let writeTimeout = null
 
 async function withTimeout(task, timeoutMs, fallbackValue) {
   let timer = null
@@ -85,9 +86,24 @@ async function writeManualLyricsStore(store) {
   await fs.writeFile(manualLyricsPath, JSON.stringify(store, null, 2), 'utf8')
 }
 
-function queueManualLyricsWrite(task) {
-  manualLyricsWritePromise = manualLyricsWritePromise.then(task, task)
-  return manualLyricsWritePromise
+async function getManualLyricsStore() {
+  if (inMemoryStore) return inMemoryStore
+  inMemoryStore = await readManualLyricsStore()
+  return inMemoryStore
+}
+
+function scheduleManualLyricsWrite() {
+  if (writeTimeout) return
+  writeTimeout = setTimeout(async () => {
+    writeTimeout = null
+    const storeToSave = inMemoryStore
+    if (!storeToSave) return
+    try {
+      await writeManualLyricsStore(storeToSave)
+    } catch (err) {
+      console.error('Failed to save manual lyrics:', err)
+    }
+  }, 2000)
 }
 
 function pickThumb(thumbnails = []) {
@@ -305,7 +321,7 @@ async function getManualLyricsEntry(videoId) {
   const id = String(videoId || '').trim()
   if (!id) return null
 
-  const store = await readManualLyricsStore()
+  const store = await getManualLyricsStore()
   return normalizeManualLyricsEntry(store[id])
 }
 
@@ -565,11 +581,9 @@ app.post('/api/manual-lyrics', async (req, res) => {
       return res.status(400).json({ error: 'Invalid lyric data' })
     }
 
-    await queueManualLyricsWrite(async () => {
-      const store = await readManualLyricsStore()
-      store[videoId] = entry
-      await writeManualLyricsStore(store)
-    })
+    const store = await getManualLyricsStore()
+    store[videoId] = entry
+    scheduleManualLyricsWrite()
 
     res.json({ item: entry })
   } catch {
@@ -585,45 +599,43 @@ app.delete('/api/manual-lyrics', async (req, res) => {
   }
 
   try {
-    await queueManualLyricsWrite(async () => {
-      const store = await readManualLyricsStore()
-      const existing = normalizeManualLyricsEntry(store[videoId])
+    const store = await getManualLyricsStore()
+    const existing = normalizeManualLyricsEntry(store[videoId])
 
-      if (!existing) {
-        delete store[videoId]
-      } else if (mode === 'thumbnail') {
-        const nextEntry = normalizeManualLyricsEntry({
-          ...existing,
-          thumbnail: '',
-          updatedAt: new Date().toISOString(),
-        })
+    if (!existing) {
+      delete store[videoId]
+    } else if (mode === 'thumbnail') {
+      const nextEntry = normalizeManualLyricsEntry({
+        ...existing,
+        thumbnail: '',
+        updatedAt: new Date().toISOString(),
+      })
 
-        if (nextEntry) {
-          store[videoId] = nextEntry
-        } else {
-          delete store[videoId]
-        }
-      } else if (mode === 'lyrics') {
-        const nextEntry = normalizeManualLyricsEntry({
-          ...existing,
-          lyrics: [],
-          lines: [],
-          updatedAt: new Date().toISOString(),
-        })
-
-        if (nextEntry) {
-          store[videoId] = nextEntry
-        } else {
-          delete store[videoId]
-        }
+      if (nextEntry) {
+        store[videoId] = nextEntry
       } else {
         delete store[videoId]
       }
+    } else if (mode === 'lyrics') {
+      const nextEntry = normalizeManualLyricsEntry({
+        ...existing,
+        lyrics: [],
+        lines: [],
+        updatedAt: new Date().toISOString(),
+      })
 
-      await writeManualLyricsStore(store)
-    })
+      if (nextEntry) {
+        store[videoId] = nextEntry
+      } else {
+        delete store[videoId]
+      }
+    } else {
+      delete store[videoId]
+    }
 
-    res.json({ ok: true })
+    scheduleManualLyricsWrite()
+
+    res.json({ success: true })
   } catch {
     res.status(500).json({ error: 'Manual lyric delete error' })
   }

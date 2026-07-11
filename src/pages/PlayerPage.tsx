@@ -16,7 +16,8 @@ import {
 import { usePlayer } from '../store/player'
 
 export function PlayerPage() {
-  const { currentTrack, state, effectiveDuration, actions } = usePlayer()
+  const state = usePlayer()
+  const { currentTrack, effectiveDuration, actions } = state
   const [lyrics, setLyrics] = useState<string[]>([])
   const [syncedLyrics, setSyncedLyrics] = useState<SyncedLyricLine[]>([])
   const [lyricSource, setLyricSource] = useState<LyricSource>('none')

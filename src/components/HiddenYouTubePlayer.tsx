@@ -8,7 +8,8 @@ export function HiddenYouTubePlayer() {
   const loadedVideoIdRef = useRef('')
   const intervalRef = useRef<number | null>(null)
   const pendingPlayRef = useRef(false)
-  const { currentTrack, state, actions } = usePlayer()
+  const state = usePlayer()
+  const { currentTrack, actions } = state
 
   const syncProgress = useEffectEvent(() => {
     const player = playerRef.current
