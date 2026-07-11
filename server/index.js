@@ -813,6 +813,22 @@ app.post('/api/save-local', async (req, res) => {
     return res.status(400).json({ error: 'Missing videoId or savePath' })
   }
 
+  // Check if directory exists on THIS server
+  try {
+    const stat = await fs.stat(savePath)
+    if (!stat.isDirectory()) {
+      return res.status(400).json({ 
+        error: `Đường dẫn "${savePath}" không phải thư mục trên server này.`,
+        code: 'PATH_NOT_FOUND'
+      })
+    }
+  } catch {
+    return res.status(400).json({ 
+      error: `Thư mục "${savePath}" không tồn tại trên server này. Tính năng lưu local chỉ hoạt động khi chạy server tại máy của bạn.`,
+      code: 'PATH_NOT_FOUND'
+    })
+  }
+
   const url = `https://www.youtube.com/watch?v=${videoId}`
   
   try {

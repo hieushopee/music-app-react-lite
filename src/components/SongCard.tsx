@@ -18,6 +18,7 @@ export function SongCard({ track, isActive, isFavorite, onPlay, onToggleFavorite
   const coverStyle = isVisible ? getCoverStyle(track.thumbnail) : {}
   const apiBase = usePlayer(s => s.apiBase)
   const localDownloadPath = usePlayer(s => s.localDownloadPath)
+  const { setLocalDownloadPath } = usePlayer(s => s.actions)
   const [isDownloading, setIsDownloading] = useState(false)
 
   const handleLocalDownload = async (e: React.MouseEvent) => {
@@ -31,10 +32,23 @@ export function SongCard({ track, isActive, isFavorite, onPlay, onToggleFavorite
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ videoId: track.id, savePath: localDownloadPath })
       })
-      if (!res.ok) throw new Error('Download failed')
-      alert(`Đã tải xong: ${track.title}`)
-    } catch (err) {
-      alert(`Lỗi tải xuống: ${track.title}`)
+      const data = await res.json()
+
+      if (!res.ok) {
+        // If the folder doesn't exist on the server → fall back to browser download
+        if (data?.code === 'PATH_NOT_FOUND') {
+          alert(`Thư mục "${localDownloadPath}" không tồn tại trên server này.\n\nĐường dẫn thư mục chỉ hoạt động khi chạy server tại máy tính của bạn (localhost).\n\nĐã tự động xóa đường dẫn và chuyển sang tải qua trình duyệt.`)
+          setLocalDownloadPath('')
+          // Fallback: open browser download
+          window.open(`${apiBase || ''}/api/download?videoId=${track.id}`, '_blank')
+          return
+        }
+        throw new Error(data?.error || 'Download failed')
+      }
+      alert(`✓ Đã tải xong: ${data.path}`)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Lỗi không xác định'
+      alert(`Lỗi tải xuống: ${msg}`)
     } finally {
       setIsDownloading(false)
     }
