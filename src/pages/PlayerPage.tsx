@@ -53,7 +53,6 @@ export function PlayerPage() {
         if (cancelled) return
         setLyrics([])
         setSyncedLyrics([])
-        setLyricSource('none')
         setHasManualSync(false)
         setManualThumbnail('')
         setError(reason instanceof Error ? reason.message : 'Không thể tải lời nhạc.')
