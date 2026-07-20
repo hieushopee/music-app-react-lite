@@ -145,10 +145,10 @@ export function PlayerPage() {
   const activeIndex = hasSyncedLyrics ? findActiveLyricIndex(lines, state.progress + lyricOffset) : -1
   const editorSeedLines = useMemo(
     () =>
-      lyricSource === 'manual' && syncedLyrics.length
+      syncedLyrics.length
         ? syncedLyrics.map((line) => ({ text: line.text, startTime: line.startTime }))
         : lyrics.map((text) => ({ text, startTime: null })),
-    [lyricSource, syncedLyrics, lyrics]
+    [syncedLyrics, lyrics]
   )
 
   const showLyricsEditorControl = Boolean(currentTrack)

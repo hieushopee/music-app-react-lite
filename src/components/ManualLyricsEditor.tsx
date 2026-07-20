@@ -93,9 +93,9 @@ export function ManualLyricsEditor({
 
     const lines = allStamped
       ? draftLines.map((line) => ({
-          text: String(line.text || '').trim(),
-          startTime: roundTime(line.startTime || 0),
-        }))
+        text: String(line.text || '').trim(),
+        startTime: roundTime(line.startTime || 0),
+      }))
       : []
 
     if (lines.length) {
@@ -125,10 +125,14 @@ export function ManualLyricsEditor({
     setError('')
   }
 
-  function handleNudge(delta: number) {
-    if (!selectedLine) return
-    const base = selectedLine.startTime ?? currentTime
-    updateSelectedLine(Math.max(base + delta, 0))
+  function handleShiftAll(delta: number) {
+    setDraftLines((previous) =>
+      previous.map((line) =>
+        line.startTime === null
+          ? line
+          : { ...line, startTime: roundTime(Math.max(line.startTime + delta, 0)) }
+      )
+    )
     setError('')
   }
 
@@ -163,7 +167,12 @@ export function ManualLyricsEditor({
       return
     }
 
-    setDraftLines(nextLines.map((text) => ({ text, startTime: null })))
+    // Giữ lại timestamps của các dòng có cùng text ở cùng vị trí
+    setDraftLines(nextLines.map((text, index) => {
+      const existing = draftLines[index]
+      const preservedTime = existing && existing.text === text ? existing.startTime : null
+      return { text, startTime: preservedTime }
+    }))
     setSelectedIndex(0)
     setBulkOpen(false)
     setEditMode(false)
@@ -306,7 +315,7 @@ export function ManualLyricsEditor({
 
         <div className="manual-lyrics-editor__body">
           <div className="manual-lyrics-editor__toolbar">
-            <button type="button" className={`ghost-pill${bulkOpen ? ' is-active' : ''}`} onClick={() => { setBulkOpen(true); setEditMode(false); setError('') }}>
+            <button type="button" className={`ghost-pill${bulkOpen ? ' is-active' : ''}`} onClick={() => { setBulkValue(draftLines.map((l) => l.text).join('\n')); setBulkOpen(true); setEditMode(false); setError('') }}>
               Thêm lyrics
             </button>
             <button type="button" className={`ghost-pill${editMode ? ' is-active' : ''}`} onClick={() => { setEditMode((v) => !v); setBulkOpen(false) }} disabled={!hasLyrics}>
@@ -314,8 +323,8 @@ export function ManualLyricsEditor({
             </button>
             <button type="button" className="ghost-pill" onClick={handleStamp}>Gán mốc dòng này</button>
             <div className="manual-lyrics-editor__toolbar-pair">
-              <button type="button" className="ghost-pill" onClick={() => handleNudge(-0.5)}>-0.5 giây</button>
-              <button type="button" className="ghost-pill" onClick={() => handleNudge(0.5)}>+0.5 giây</button>
+              <button type="button" className="ghost-pill" onClick={() => handleShiftAll(-0.1)} disabled={!hasLyrics}>-0.1tt</button>
+              <button type="button" className="ghost-pill" onClick={() => handleShiftAll(0.1)} disabled={!hasLyrics}>+0.1tt</button>
             </div>
             <div className="manual-lyrics-editor__toolbar-pair">
               <button type="button" className="ghost-pill" onClick={handleSeekSelected} disabled={selectedLine?.startTime === null}>Tới mốc</button>
