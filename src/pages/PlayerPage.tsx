@@ -10,7 +10,6 @@ import {
   resetManualCover,
   resetManualLyrics,
   saveManualLyrics,
-  type LyricSource,
   type SyncedLyricLine,
 } from '../services/musicApi'
 import { usePlayer, getCurrentTrack, getEffectiveDuration } from '../store/player'
@@ -22,7 +21,6 @@ export function PlayerPage() {
   const effectiveDuration = getEffectiveDuration(state)
   const [lyrics, setLyrics] = useState<string[]>([])
   const [syncedLyrics, setSyncedLyrics] = useState<SyncedLyricLine[]>([])
-  const [lyricSource, setLyricSource] = useState<LyricSource>('none')
   const [hasManualSync, setHasManualSync] = useState(false)
   const [manualThumbnail, setManualThumbnail] = useState('')
   const [loading, setLoading] = useState(false)
@@ -45,7 +43,6 @@ export function PlayerPage() {
         if (cancelled) return
         setLyrics(context.lyrics)
         setSyncedLyrics(context.syncedLyrics)
-        setLyricSource(context.lyricSource)
         setHasManualSync(context.hasManualSync)
         setManualThumbnail(context.thumbnail || '')
         const nextThumbnail = context.thumbnail || track.sourceThumbnail || ''
