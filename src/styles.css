@@ -123,6 +123,30 @@ code {
   display: none;
 }
 
+.artist-rail__loader {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  margin: 2px 0 8px;
+  border-radius: 50%;
+  background: var(--mint);
+  box-shadow: 0 0 18px rgba(143, 211, 182, 0.65);
+  animation: artistLoaderPulse 900ms ease-in-out infinite;
+}
+
+@keyframes artistLoaderPulse {
+  0%,
+  100% {
+    opacity: 0.34;
+    transform: scale(0.78);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .artist-rail__button {
   position: relative;
   width: var(--artist-pulse-size);
