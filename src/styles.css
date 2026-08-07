@@ -1055,6 +1055,10 @@ code {
   gap: 10px;
 }
 
+.settings-actions {
+  margin-top: 14px;
+}
+
 .song-card__actions {
   flex-wrap: nowrap;
   align-items: stretch;
@@ -1082,6 +1086,10 @@ code {
   border: 1px dashed rgba(255, 255, 255, 0.15);
   background: rgba(255, 255, 255, 0.03);
   color: rgba(248, 245, 234, 0.82);
+}
+
+.feedback {
+  margin: 16px 0 0;
 }
 
 .feedback.ok {

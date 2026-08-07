@@ -7,8 +7,9 @@ export function SettingsPage() {
   const { actions } = state
   const currentTrack = getCurrentTrack(state)
   const [draftBase, setDraftBase] = useState(state.apiBase)
-  const [status, setStatus] = useState('')
-  const [statusType, setStatusType] = useState<'idle' | 'ok' | 'error'>('idle')
+  const [apiStatus, setApiStatus] = useState('')
+  const [apiStatusType, setApiStatusType] = useState<'idle' | 'ok' | 'error'>('idle')
+  const [adminStatus, setAdminStatus] = useState('')
   const [checking, setChecking] = useState(false)
   const [adminTokenDraft, setAdminTokenDraft] = useState(() => getAdminToken())
 
@@ -22,23 +23,23 @@ export function SettingsPage() {
 
   async function handleTest() {
     setChecking(true)
-    setStatus('')
-    setStatusType('idle')
+    setApiStatus('')
+    setApiStatusType('idle')
 
     try {
       const normalized = normalizeApiBase(draftBase)
       const result = await testApiBase(normalized)
       actions.setApiBase(normalized)
       setDraftBase(normalized)
-      setStatusType('ok')
+      setApiStatusType('ok')
       const storageLabel = result?.storage === 'postgres' ? 'Postgres' : 'JSON local'
       const adminLabel = result?.adminProtected ? 'đã khóa chỉnh sửa' : 'chưa khóa chỉnh sửa'
-      setStatus(
+      setApiStatus(
         `Kết nối thành công: ${result?.source || 'ytmusic'} · lưu bằng ${storageLabel} · ${adminLabel} · test search OK (${result?.sampleCount || 0} kết quả mẫu) · đang dùng ${normalized || '/api'}`
       )
     } catch (error) {
-      setStatusType('error')
-      setStatus(
+      setApiStatusType('error')
+      setApiStatus(
         error instanceof Error
           ? `Kết nối thất bại hoặc server không tìm nhạc được: ${error.message}`
           : 'Không kiểm tra được kết nối.'
@@ -52,21 +53,20 @@ export function SettingsPage() {
     const normalized = normalizeApiBase(draftBase)
     actions.setApiBase(normalized)
     setDraftBase(normalized)
-    setStatusType('ok')
-    setStatus(`Đã lưu địa chỉ API: ${normalized || '/api'}`)
+    setApiStatusType('ok')
+    setApiStatus(`Đã lưu địa chỉ API: ${normalized || '/api'}`)
   }
 
   function handleClear() {
     actions.setApiBase('')
     setDraftBase('')
-    setStatusType('ok')
-    setStatus('Đã xóa địa chỉ ghi đè. App sẽ dùng proxy mặc định hoặc biến môi trường.')
+    setApiStatusType('ok')
+    setApiStatus('Đã xóa địa chỉ ghi đè. App sẽ dùng proxy mặc định hoặc biến môi trường.')
   }
 
   function handleSaveAdminToken() {
     setAdminToken(adminTokenDraft)
-    setStatusType('ok')
-    setStatus(adminTokenDraft.trim() ? 'Đã lưu mã quản trị trên trình duyệt này.' : 'Đã xóa mã quản trị khỏi trình duyệt này.')
+    setAdminStatus(adminTokenDraft.trim() ? 'Đã lưu mã quản trị trên trình duyệt này.' : 'Đã xóa mã quản trị khỏi trình duyệt này.')
   }
 
   return (
@@ -107,7 +107,7 @@ export function SettingsPage() {
           </button>
         </div>
 
-        {status ? <p className={`feedback ${statusType === 'error' ? 'error' : 'ok'}`}>{status}</p> : null}
+        {apiStatus ? <p className={`feedback ${apiStatusType === 'error' ? 'error' : 'ok'}`}>{apiStatus}</p> : null}
       </section>
 
       <section className="settings-card settings-card--wide">
@@ -140,13 +140,14 @@ export function SettingsPage() {
             onClick={() => {
               setAdminTokenDraft('')
               setAdminToken('')
-              setStatusType('ok')
-              setStatus('Đã xóa mã quản trị khỏi trình duyệt này.')
+              setAdminStatus('Đã xóa mã quản trị khỏi trình duyệt này.')
             }}
           >
             Xóa mã
           </button>
         </div>
+
+        {adminStatus ? <p className="feedback ok">{adminStatus}</p> : null}
       </section>
 
       <section className="settings-grid">
