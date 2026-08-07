@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router'
 import { fetchArtistProfile, searchMusic, type ArtistProfile } from '../services/musicApi'
 import { usePlayer, getCurrentTrack } from '../store/player'
 

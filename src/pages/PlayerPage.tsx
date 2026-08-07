@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { LyricsView } from '../components/LyricsView'
 import { ManualLyricsEditor } from '../components/ManualLyricsEditor'
 import { getCoverStyle } from '../lib/cover'

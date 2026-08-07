@@ -22,6 +22,13 @@ const jsonBodyLimit = process.env.JSON_BODY_LIMIT || '6mb'
 const maxCoverBytes = Number(process.env.MAX_COVER_BYTES || 2 * 1024 * 1024)
 const lyricCacheTtlMs = Number(process.env.LYRIC_CACHE_TTL_DAYS || 60) * 24 * 60 * 60 * 1000
 const lyricNegativeCacheTtlMs = Number(process.env.LYRIC_NEGATIVE_CACHE_TTL_DAYS || 2) * 24 * 60 * 60 * 1000
+const adminToken = String(process.env.ADMIN_TOKEN || '').trim()
+const requiresAdminToken = Boolean(adminToken) || process.env.REQUIRE_ADMIN_TOKEN === 'true' || process.env.NODE_ENV === 'production'
+const allowedOrigins = buildAllowedOrigins()
+const apiRateLimitMax = Number(process.env.API_RATE_LIMIT_PER_MINUTE || 240)
+const writeRateLimitMax = Number(process.env.WRITE_RATE_LIMIT_PER_MINUTE || 30)
+const maxRemoteLyricJobStatus = Number(process.env.MAX_REMOTE_LYRIC_JOB_STATUS || 300)
+const maxLocalLyricCacheEntries = Number(process.env.MAX_LOCAL_LYRIC_CACHE_ENTRIES || 200)
 const { Pool } = pg
 const dbPool = databaseUrl
   ? new Pool({
@@ -31,7 +38,29 @@ const dbPool = databaseUrl
   : null
 
 app.set('trust proxy', true)
-app.use(cors())
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || !allowedOrigins.size || allowedOrigins.has(normalizeOrigin(origin))) {
+      callback(null, true)
+      return
+    }
+
+    callback(null, false)
+  },
+}))
+app.use('/api', createRateLimiter({
+  max: apiRateLimitMax,
+  windowMs: 60 * 1000,
+}))
+app.use('/api/manual-lyrics', createRateLimiter({
+  max: writeRateLimitMax,
+  windowMs: 60 * 1000,
+}))
+app.use('/api/manual-lyrics', requireAdminToken)
+app.use('/api/context-status', createRateLimiter({
+  max: writeRateLimitMax,
+  windowMs: 60 * 1000,
+}))
 app.use(express.json({ limit: jsonBodyLimit }))
 app.use(express.static(frontendDist))
 
@@ -52,6 +81,91 @@ let importedLegacyLyrics = false
 const remoteLyricJobs = new Map()
 const remoteLyricJobStatus = new Map()
 const localLyricCache = new Map()
+
+function normalizeOrigin(value) {
+  try {
+    const url = new URL(String(value || '').trim())
+    return url.origin
+  } catch {
+    return ''
+  }
+}
+
+function buildAllowedOrigins() {
+  const rawOrigins = [
+    process.env.PUBLIC_API_BASE,
+    process.env.PUBLIC_APP_ORIGIN,
+    ...(String(process.env.ALLOWED_ORIGINS || '').split(',')),
+  ]
+
+  return new Set(rawOrigins.map(normalizeOrigin).filter(Boolean))
+}
+
+function createRateLimiter({ max, windowMs }) {
+  const hits = new Map()
+  const limit = Number.isFinite(max) && max > 0 ? max : 240
+
+  return (req, res, next) => {
+    const now = Date.now()
+    const key = `${req.ip || req.socket.remoteAddress || 'unknown'}:${req.path}`
+    const current = hits.get(key)
+
+    if (!current || current.resetAt <= now) {
+      hits.set(key, { count: 1, resetAt: now + windowMs })
+      return next()
+    }
+
+    current.count += 1
+    if (current.count > limit) {
+      res.set('Retry-After', String(Math.ceil((current.resetAt - now) / 1000)))
+      return res.status(429).json({ error: 'Quá nhiều yêu cầu. Vui lòng thử lại sau.' })
+    }
+
+    if (hits.size > 2000) {
+      for (const [hitKey, value] of hits.entries()) {
+        if (value.resetAt <= now) hits.delete(hitKey)
+      }
+    }
+
+    return next()
+  }
+}
+
+function tokensMatch(received, expected) {
+  const receivedBuffer = Buffer.from(String(received || ''))
+  const expectedBuffer = Buffer.from(String(expected || ''))
+
+  if (!receivedBuffer.length || receivedBuffer.length !== expectedBuffer.length) return false
+  return crypto.timingSafeEqual(receivedBuffer, expectedBuffer)
+}
+
+function requireAdminToken(req, res, next) {
+  if (!requiresAdminToken) {
+    return next()
+  }
+
+  if (!adminToken) {
+    return res.status(503).json({ error: 'Server production chưa cấu hình ADMIN_TOKEN nên tạm khóa thao tác chỉnh lyrics.' })
+  }
+
+  const received = req.get('x-admin-token')
+  if (!tokensMatch(received, adminToken)) {
+    return res.status(401).json({ error: 'Bạn cần nhập đúng mã quản trị trong Cài đặt để chỉnh lyrics.' })
+  }
+
+  return next()
+}
+
+function rememberLimited(map, key, value, limit) {
+  map.set(key, value)
+
+  if (map.size <= limit) return
+
+  const firstKey = map.keys().next().value
+  if (firstKey !== undefined) {
+    map.delete(firstKey)
+  }
+}
 
 async function withTimeout(task, timeoutMs, fallbackValue) {
   let timer = null
@@ -125,7 +239,13 @@ async function ensureDatabase() {
     })()
   }
 
-  await dbReadyPromise
+  try {
+    await dbReadyPromise
+  } catch (error) {
+    dbReadyPromise = null
+    throw error
+  }
+
   return true
 }
 
@@ -382,10 +502,10 @@ async function saveRemoteLyricsCache(videoId, meta, context) {
     return
   }
 
-  localLyricCache.set(cacheKey, {
+  rememberLimited(localLyricCache, cacheKey, {
     expiresAt: expiresAt.getTime(),
     context: payload,
-  })
+  }, maxLocalLyricCacheEntries)
 }
 
 function mapManualLyricsRow(row, req = null) {
@@ -915,30 +1035,30 @@ function queueRemoteLyricRefresh(params) {
   const cacheKey = getLyricCacheKey(params.videoId)
   if (!cacheKey || remoteLyricJobs.has(cacheKey)) return
 
-  remoteLyricJobStatus.set(cacheKey, {
+  rememberLimited(remoteLyricJobStatus, cacheKey, {
     state: 'running',
     startedAt: new Date().toISOString(),
-  })
+  }, maxRemoteLyricJobStatus)
 
   const job = fetchRemoteTrackContext(params)
     .then(async ({ meta, context }) => {
       await saveRemoteLyricsCache(cacheKey, meta, context)
-      remoteLyricJobStatus.set(cacheKey, {
+      rememberLimited(remoteLyricJobStatus, cacheKey, {
         state: 'done',
         source: context.lyricSource,
         lyrics: context.lyrics.length,
         syncedLyrics: context.syncedLyrics.length,
         finishedAt: new Date().toISOString(),
-      })
+      }, maxRemoteLyricJobStatus)
     })
     .catch((error) => {
       const message = error instanceof Error ? error.message : String(error)
       console.error('Remote lyric refresh failed:', message)
-      remoteLyricJobStatus.set(cacheKey, {
+      rememberLimited(remoteLyricJobStatus, cacheKey, {
         state: 'failed',
         error: message,
         finishedAt: new Date().toISOString(),
-      })
+      }, maxRemoteLyricJobStatus)
 
       return saveRemoteLyricsCache(cacheKey, {
         title: params.titleHint,
@@ -972,7 +1092,13 @@ function dedupeById(list) {
 app.get('/api/health', async (_req, res) => {
   try {
     await ensureDatabase()
-    res.json({ ok: true, source: 'ytmusic', storage: dbPool ? 'postgres' : 'json' })
+    res.json({
+      ok: true,
+      source: 'ytmusic',
+      storage: dbPool ? 'postgres' : 'json',
+      adminProtected: requiresAdminToken && Boolean(adminToken),
+      adminRequired: requiresAdminToken,
+    })
   } catch {
     res.status(500).json({ ok: false, source: 'ytmusic', storage: 'postgres', error: 'Database connection error' })
   }

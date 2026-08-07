@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getConfiguredApiBase, normalizeApiBase, testApiBase } from '../services/musicApi'
+import { getAdminToken, getConfiguredApiBase, normalizeApiBase, setAdminToken, testApiBase } from '../services/musicApi'
 import { usePlayer, getCurrentTrack } from '../store/player'
 
 export function SettingsPage() {
@@ -10,6 +10,7 @@ export function SettingsPage() {
   const [status, setStatus] = useState('')
   const [statusType, setStatusType] = useState<'idle' | 'ok' | 'error'>('idle')
   const [checking, setChecking] = useState(false)
+  const [adminTokenDraft, setAdminTokenDraft] = useState(() => getAdminToken())
 
   useEffect(() => {
     setDraftBase(state.apiBase)
@@ -31,8 +32,9 @@ export function SettingsPage() {
       setDraftBase(normalized)
       setStatusType('ok')
       const storageLabel = result?.storage === 'postgres' ? 'Postgres' : 'JSON local'
+      const adminLabel = result?.adminProtected ? 'đã khóa chỉnh sửa' : 'chưa khóa chỉnh sửa'
       setStatus(
-        `Kết nối thành công: ${result?.source || 'ytmusic'} · lưu bằng ${storageLabel} · test search OK (${result?.sampleCount || 0} kết quả mẫu) · đang dùng ${normalized || '/api'}`
+        `Kết nối thành công: ${result?.source || 'ytmusic'} · lưu bằng ${storageLabel} · ${adminLabel} · test search OK (${result?.sampleCount || 0} kết quả mẫu) · đang dùng ${normalized || '/api'}`
       )
     } catch (error) {
       setStatusType('error')
@@ -59,6 +61,12 @@ export function SettingsPage() {
     setDraftBase('')
     setStatusType('ok')
     setStatus('Đã xóa địa chỉ ghi đè. App sẽ dùng proxy mặc định hoặc biến môi trường.')
+  }
+
+  function handleSaveAdminToken() {
+    setAdminToken(adminTokenDraft)
+    setStatusType('ok')
+    setStatus(adminTokenDraft.trim() ? 'Đã lưu mã quản trị trên trình duyệt này.' : 'Đã xóa mã quản trị khỏi trình duyệt này.')
   }
 
   return (
@@ -102,6 +110,45 @@ export function SettingsPage() {
         {status ? <p className={`feedback ${statusType === 'error' ? 'error' : 'ok'}`}>{status}</p> : null}
       </section>
 
+      <section className="settings-card settings-card--wide">
+        <span>Bảo vệ chỉnh sửa</span>
+        <h2>Mã quản trị lyrics</h2>
+        <p>
+          Nếu server Render có biến <code>ADMIN_TOKEN</code>, nhập cùng mã ở đây để lưu, xóa lyrics hoặc đổi ảnh bìa.
+        </p>
+
+        <label className="settings-label" htmlFor="admin-token">
+          Mã quản trị
+        </label>
+        <input
+          id="admin-token"
+          className="settings-input"
+          type="password"
+          value={adminTokenDraft}
+          onChange={(event) => setAdminTokenDraft(event.target.value)}
+          placeholder="Nhập ADMIN_TOKEN"
+          autoComplete="off"
+        />
+
+        <div className="settings-actions">
+          <button type="button" className="action-pill" onClick={handleSaveAdminToken}>
+            Lưu mã
+          </button>
+          <button
+            type="button"
+            className="ghost-pill"
+            onClick={() => {
+              setAdminTokenDraft('')
+              setAdminToken('')
+              setStatusType('ok')
+              setStatus('Đã xóa mã quản trị khỏi trình duyệt này.')
+            }}
+          >
+            Xóa mã
+          </button>
+        </div>
+      </section>
+
       <section className="settings-grid">
         <article className="settings-card">
           <span>Trạng thái</span>
@@ -121,7 +168,7 @@ export function SettingsPage() {
           <span>Cách chạy</span>
           <h3>Quy trình local</h3>
           <ol>
-            <li>Vào thư mục `D:\music-app-react-lite`.</li>
+            <li>Vào thư mục `D:\code\music-app-react-lite`.</li>
             <li>Chạy `npm install` ở root và `npm install` trong `server`.</li>
             <li>Chạy `npm run dev` để mở cả web và API cùng lúc.</li>
           </ol>

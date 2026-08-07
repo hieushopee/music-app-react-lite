@@ -33,6 +33,7 @@ export interface TrackContext {
 }
 
 const TRACK_CONTEXT_CACHE_KEY = 'pulseframe-track-context-cache-v1'
+const ADMIN_TOKEN_KEY = 'pulseframe-admin-token'
 const TRACK_CONTEXT_CACHE_LIMIT = 40
 const DEFAULT_REQUEST_TIMEOUT_MS = 8000
 const CONTEXT_REQUEST_TIMEOUT_MS = 20000
@@ -53,6 +54,36 @@ export function normalizeApiBase(base: string | undefined | null) {
 
 export function getConfiguredApiBase() {
   return normalizeApiBase(import.meta.env.VITE_API_BASE)
+}
+
+export function getAdminToken() {
+  if (typeof window === 'undefined') return ''
+
+  try {
+    return String(window.localStorage.getItem(ADMIN_TOKEN_KEY) || '').trim()
+  } catch {
+    return ''
+  }
+}
+
+export function setAdminToken(value: string) {
+  if (typeof window === 'undefined') return
+
+  const token = String(value || '').trim()
+  try {
+    if (token) {
+      window.localStorage.setItem(ADMIN_TOKEN_KEY, token)
+    } else {
+      window.localStorage.removeItem(ADMIN_TOKEN_KEY)
+    }
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function withAdminHeaders(headers: Record<string, string> = {}) {
+  const token = getAdminToken()
+  return token ? { ...headers, 'x-admin-token': token } : headers
 }
 
 function buildCandidates(baseOverride = '') {
@@ -447,9 +478,9 @@ export async function saveManualLyrics(track: Track | null, lyrics: string[], li
 
   const data = await requestViaCandidates('/api/manual-lyrics', baseOverride, {
     method: 'POST',
-    headers: {
+    headers: withAdminHeaders({
       'Content-Type': 'application/json',
-    },
+    }),
     body: JSON.stringify({
       videoId,
       title: String(track?.title || ''),
@@ -477,6 +508,7 @@ export async function deleteManualLyrics(videoId: string, baseOverride = '') {
 
   const result = await requestViaCandidates(`/api/manual-lyrics?videoId=${encodeURIComponent(id)}`, baseOverride, {
     method: 'DELETE',
+    headers: withAdminHeaders(),
   })
   invalidateTrackContextCache(id)
   return result
@@ -490,6 +522,7 @@ export async function resetManualCover(videoId: string, baseOverride = '') {
 
   const result = await requestViaCandidates(`/api/manual-lyrics?videoId=${encodeURIComponent(id)}&mode=thumbnail`, baseOverride, {
     method: 'DELETE',
+    headers: withAdminHeaders(),
   })
   invalidateTrackContextCache(id)
   return result
@@ -503,6 +536,7 @@ export async function resetManualLyrics(videoId: string, baseOverride = '') {
 
   const result = await requestViaCandidates(`/api/manual-lyrics?videoId=${encodeURIComponent(id)}&mode=lyrics`, baseOverride, {
     method: 'DELETE',
+    headers: withAdminHeaders(),
   })
   invalidateTrackContextCache(id)
   return result

@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { formatDuration } from '../lib/format'
 import { getCoverStyle } from '../lib/cover'
 import { usePlayer, getCurrentTrack, getEffectiveDuration } from '../store/player'

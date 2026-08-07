@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router'
 import { usePlayer, getCurrentTrack } from '../store/player'
 import { fetchAlbumDetail } from '../services/musicApi'
 import type { AlbumDetail, Track } from '../services/musicApi'
@@ -83,28 +83,14 @@ export function AlbumPage() {
         </div>
         <h1 className="album-header__title">{album.name}</h1>
         <p className="album-header__meta">
-          Đĩa nhạc • {album.year || '2026'}<br />
+          Đĩa nhạc{album.year ? ` • ${album.year}` : ''}<br />
           {album.songs.length} bài hát • {Math.floor(totalDuration / 60)} phút
         </p>
         
         <div className="album-header__actions">
-          <button type="button" className="circle-btn" aria-label="Thêm vào thư viện">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
-            </svg>
-          </button>
-          
           <button type="button" className="play-fab" onClick={handlePlayAll} aria-label="Phát toàn bộ">
             <svg viewBox="0 0 24 24" fill="currentColor">
               <polygon points="5 3 19 12 5 21 5 3"></polygon>
-            </svg>
-          </button>
-          
-          <button type="button" className="circle-btn" aria-label="Thêm tùy chọn">
-            <svg viewBox="0 0 24 24" fill="currentColor">
-              <circle cx="12" cy="12" r="2" />
-              <circle cx="19" cy="12" r="2" />
-              <circle cx="5" cy="12" r="2" />
             </svg>
           </button>
         </div>
@@ -122,7 +108,10 @@ export function AlbumPage() {
               <button 
                 type="button" 
                 className="index-play-btn"
-                onClick={() => handlePlayTrack(song)}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  handlePlayTrack(song)
+                }}
               >
                 <svg viewBox="0 0 24 24" fill="currentColor">
                   <polygon points="5 3 19 12 5 21 5 3"></polygon>

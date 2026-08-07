@@ -1,5 +1,5 @@
 import { startTransition, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import type { Track, Album } from '../services/musicApi'
 import { searchMusic, searchAlbums, getSearchSuggestions } from '../services/musicApi'
 import { SectionBlock } from '../components/SectionBlock'
