@@ -3,6 +3,8 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import YTMusic from 'ytmusic-api'
 import lrclibApi from 'lrclib-api'
+import pg from 'pg'
+import crypto from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -15,9 +17,20 @@ const serverDir = path.dirname(fileURLToPath(import.meta.url))
 const dataDir = path.join(serverDir, 'data')
 const manualLyricsPath = path.join(dataDir, 'manual-lyrics.json')
 const frontendDist = path.join(serverDir, '..', 'dist')
+const databaseUrl = String(process.env.DATABASE_URL || '').trim()
+const jsonBodyLimit = process.env.JSON_BODY_LIMIT || '6mb'
+const maxCoverBytes = Number(process.env.MAX_COVER_BYTES || 2 * 1024 * 1024)
+const { Pool } = pg
+const dbPool = databaseUrl
+  ? new Pool({
+      connectionString: databaseUrl,
+      ssl: shouldUseDatabaseSsl(databaseUrl) ? { rejectUnauthorized: false } : false,
+    })
+  : null
 
+app.set('trust proxy', true)
 app.use(cors())
-app.use(express.json({ limit: '1mb' }))
+app.use(express.json({ limit: jsonBodyLimit }))
 app.use(express.static(frontendDist))
 
 app.use((req, res, next) => {
@@ -32,7 +45,8 @@ const { Client: LRCLibClient, parseLocalLyrics } = lrclibApi
 const lrclib = new LRCLibClient()
 let initPromise = null
 let inMemoryStore = null
-let writeTimeout = null
+let dbReadyPromise = null
+let importedLegacyLyrics = false
 
 async function withTimeout(task, timeoutMs, fallbackValue) {
   let timer = null
@@ -56,6 +70,87 @@ async function ensureYtMusic() {
     initPromise = ytmusic.initialize({ GL: 'VN', HL: 'vi' })
   }
   return initPromise
+}
+
+function shouldUseDatabaseSsl(url) {
+  if (process.env.DATABASE_SSL === 'false') return false
+  return !/localhost|127\.0\.0\.1/i.test(url)
+}
+
+async function ensureDatabase() {
+  if (!dbPool) return false
+
+  if (!dbReadyPromise) {
+    dbReadyPromise = (async () => {
+      await dbPool.query(`
+        CREATE TABLE IF NOT EXISTS manual_track_data (
+          video_id TEXT PRIMARY KEY,
+          title TEXT NOT NULL DEFAULT '',
+          artist TEXT NOT NULL DEFAULT '',
+          album TEXT NOT NULL DEFAULT '',
+          lyrics JSONB NOT NULL DEFAULT '[]'::jsonb,
+          lines JSONB NOT NULL DEFAULT '[]'::jsonb,
+          cover_data BYTEA,
+          cover_mime TEXT,
+          cover_hash TEXT,
+          cover_url TEXT NOT NULL DEFAULT '',
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `)
+
+      await importLegacyManualLyricsIntoDatabase()
+    })()
+  }
+
+  await dbReadyPromise
+  return true
+}
+
+async function importLegacyManualLyricsIntoDatabase() {
+  if (importedLegacyLyrics || !dbPool) return
+  importedLegacyLyrics = true
+
+  const legacyStore = await readManualLyricsStore()
+  const entries = Object.values(legacyStore).map(normalizeManualLyricsEntry).filter(Boolean)
+  if (!entries.length) return
+
+  let imported = 0
+
+  for (const entry of entries) {
+    let cover = { buffer: null, mime: null, hash: null, url: '' }
+    try {
+      cover = parseCoverInput(entry.thumbnail)
+    } catch (error) {
+      console.warn(`Skipped oversized legacy cover for ${entry.videoId}:`, error.message)
+    }
+
+    const result = await dbPool.query(
+      `
+        INSERT INTO manual_track_data
+          (video_id, title, artist, album, lyrics, lines, cover_data, cover_mime, cover_hash, cover_url, updated_at)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, $10, $11)
+        ON CONFLICT (video_id) DO NOTHING
+      `,
+      [
+        entry.videoId,
+        entry.title,
+        entry.artist,
+        entry.album,
+        JSON.stringify(entry.lyrics),
+        JSON.stringify(entry.lines),
+        cover.buffer,
+        cover.mime,
+        cover.hash,
+        cover.url,
+        entry.updatedAt,
+      ]
+    )
+    imported += result.rowCount || 0
+  }
+
+  if (imported) {
+    console.log(`Imported ${imported} manual lyric entr${imported === 1 ? 'y' : 'ies'} into Postgres`)
+  }
 }
 
 async function ensureManualLyricsStore() {
@@ -91,18 +186,254 @@ async function getManualLyricsStore() {
   return inMemoryStore
 }
 
-function scheduleManualLyricsWrite() {
-  if (writeTimeout) return
-  writeTimeout = setTimeout(async () => {
-    writeTimeout = null
-    const storeToSave = inMemoryStore
-    if (!storeToSave) return
-    try {
-      await writeManualLyricsStore(storeToSave)
-    } catch (err) {
-      console.error('Failed to save manual lyrics:', err)
+function parseCoverInput(value) {
+  const input = String(value || '').trim()
+  if (!input) {
+    return { buffer: null, mime: null, hash: null, url: '' }
+  }
+
+  const dataUrlMatch = input.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i)
+  if (dataUrlMatch) {
+    const buffer = Buffer.from(dataUrlMatch[2], 'base64')
+    if (!buffer.length) return { buffer: null, mime: null, hash: null, url: '' }
+    if (buffer.length > maxCoverBytes) {
+      const error = new Error(`Ảnh bìa quá lớn. Tối đa ${Math.round(maxCoverBytes / 1024 / 1024)}MB sau khi nén.`)
+      error.status = 413
+      throw error
     }
-  }, 2000)
+
+    return {
+      buffer,
+      mime: dataUrlMatch[1].toLowerCase(),
+      hash: crypto.createHash('sha256').update(buffer).digest('hex').slice(0, 24),
+      url: '',
+    }
+  }
+
+  if (/^https?:\/\//i.test(input)) {
+    return {
+      buffer: null,
+      mime: null,
+      hash: crypto.createHash('sha256').update(input).digest('hex').slice(0, 24),
+      url: input,
+    }
+  }
+
+  return { buffer: null, mime: null, hash: null, url: '' }
+}
+
+function getRequestOrigin(req) {
+  const configured = String(process.env.PUBLIC_API_BASE || '').trim().replace(/\/+$/, '')
+  if (configured) return configured
+
+  const forwardedProto = String(req.get('x-forwarded-proto') || '').split(',')[0].trim()
+  const protocol = forwardedProto || req.protocol || 'http'
+  return `${protocol}://${req.get('host')}`
+}
+
+function buildManualCoverUrl(req, videoId, version = '') {
+  const suffix = version ? `?v=${encodeURIComponent(String(version))}` : ''
+  return `${getRequestOrigin(req)}/api/manual-cover/${encodeURIComponent(videoId)}${suffix}`
+}
+
+function parseJsonArray(value) {
+  if (Array.isArray(value)) return value
+  if (typeof value !== 'string') return []
+
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function mapManualLyricsRow(row, req = null) {
+  if (!row) return null
+
+  const hasStoredCover = Boolean(row.has_cover || row.cover_data)
+  const thumbnail = hasStoredCover
+    ? req
+      ? buildManualCoverUrl(req, row.video_id, row.cover_hash || row.updated_at)
+      : '__manual_cover__'
+    : String(row.cover_url || '')
+
+  return normalizeManualLyricsEntry({
+    videoId: row.video_id,
+    title: row.title,
+    artist: row.artist,
+    album: row.album,
+    lyrics: parseJsonArray(row.lyrics),
+    lines: parseJsonArray(row.lines),
+    thumbnail,
+    updatedAt: row.updated_at,
+  })
+}
+
+async function getManualLyricsEntry(videoId, req = null) {
+  const id = String(videoId || '').trim()
+  if (!id) return null
+
+  if (await ensureDatabase()) {
+    const result = await dbPool.query(
+      `
+        SELECT
+          video_id, title, artist, album, lyrics, lines, cover_url, cover_mime, cover_hash, updated_at,
+          cover_data IS NOT NULL AS has_cover
+        FROM manual_track_data
+        WHERE video_id = $1
+      `,
+      [id]
+    )
+    return mapManualLyricsRow(result.rows[0], req)
+  }
+
+  const store = await getManualLyricsStore()
+  return normalizeManualLyricsEntry(store[id])
+}
+
+async function saveManualLyricsEntry(input, thumbnail) {
+  const entry = normalizeManualLyricsEntry(input)
+  if (!entry) return null
+
+  const cover = parseCoverInput(thumbnail)
+  const hasCoverUpdate = Boolean(cover.buffer || cover.url)
+
+  if (await ensureDatabase()) {
+    const result = await dbPool.query(
+      `
+        INSERT INTO manual_track_data
+          (video_id, title, artist, album, lyrics, lines, cover_data, cover_mime, cover_hash, cover_url, updated_at)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, $10, NOW())
+        ON CONFLICT (video_id) DO UPDATE SET
+          title = EXCLUDED.title,
+          artist = EXCLUDED.artist,
+          album = EXCLUDED.album,
+          lyrics = EXCLUDED.lyrics,
+          lines = EXCLUDED.lines,
+          cover_data = CASE WHEN $11 THEN EXCLUDED.cover_data ELSE manual_track_data.cover_data END,
+          cover_mime = CASE WHEN $11 THEN EXCLUDED.cover_mime ELSE manual_track_data.cover_mime END,
+          cover_hash = CASE WHEN $11 THEN EXCLUDED.cover_hash ELSE manual_track_data.cover_hash END,
+          cover_url = CASE WHEN $11 THEN EXCLUDED.cover_url ELSE manual_track_data.cover_url END,
+          updated_at = NOW()
+        RETURNING
+          video_id, title, artist, album, lyrics, lines, cover_url, cover_mime, cover_hash, updated_at,
+          cover_data IS NOT NULL AS has_cover
+      `,
+      [
+        entry.videoId,
+        entry.title,
+        entry.artist,
+        entry.album,
+        JSON.stringify(entry.lyrics),
+        JSON.stringify(entry.lines),
+        cover.buffer,
+        cover.mime,
+        cover.hash,
+        cover.url,
+        hasCoverUpdate,
+      ]
+    )
+    return mapManualLyricsRow(result.rows[0])
+  }
+
+  const store = await getManualLyricsStore()
+  const previous = normalizeManualLyricsEntry(store[entry.videoId])
+  store[entry.videoId] = {
+    ...entry,
+    thumbnail: hasCoverUpdate ? thumbnail : previous?.thumbnail || entry.thumbnail || '',
+    updatedAt: new Date().toISOString(),
+  }
+  await writeManualLyricsStore(store)
+  return normalizeManualLyricsEntry(store[entry.videoId])
+}
+
+async function deleteManualLyricsEntry(videoId, mode) {
+  const id = String(videoId || '').trim()
+  if (!id) return
+
+  if (await ensureDatabase()) {
+    if (mode === 'thumbnail') {
+      await dbPool.query(
+        `
+          DELETE FROM manual_track_data
+          WHERE video_id = $1
+            AND jsonb_array_length(lyrics) = 0
+            AND jsonb_array_length(lines) = 0
+        `,
+        [id]
+      )
+      await dbPool.query(
+        `
+          UPDATE manual_track_data
+          SET cover_data = NULL, cover_mime = NULL, cover_hash = NULL, cover_url = '', updated_at = NOW()
+          WHERE video_id = $1
+        `,
+        [id]
+      )
+      return
+    }
+
+    if (mode === 'lyrics') {
+      await dbPool.query(
+        `
+          UPDATE manual_track_data
+          SET lyrics = '[]'::jsonb, lines = '[]'::jsonb, updated_at = NOW()
+          WHERE video_id = $1
+        `,
+        [id]
+      )
+      await dbPool.query(
+        `
+          DELETE FROM manual_track_data
+          WHERE video_id = $1
+            AND cover_data IS NULL
+            AND cover_url = ''
+        `,
+        [id]
+      )
+      return
+    }
+
+    await dbPool.query('DELETE FROM manual_track_data WHERE video_id = $1', [id])
+    return
+  }
+
+  const store = await getManualLyricsStore()
+  const existing = normalizeManualLyricsEntry(store[id])
+
+  if (!existing) {
+    delete store[id]
+  } else if (mode === 'thumbnail') {
+    const nextEntry = normalizeManualLyricsEntry({
+      ...existing,
+      thumbnail: '',
+      updatedAt: new Date().toISOString(),
+    })
+
+    if (nextEntry) {
+      store[id] = nextEntry
+    } else {
+      delete store[id]
+    }
+  } else if (mode === 'lyrics') {
+    const nextEntry = normalizeManualLyricsEntry({
+      ...existing,
+      lyrics: [],
+      lines: [],
+      updatedAt: new Date().toISOString(),
+    })
+
+    if (nextEntry) {
+      store[id] = nextEntry
+    } else {
+      delete store[id]
+    }
+  } else {
+    delete store[id]
+  }
+
+  await writeManualLyricsStore(store)
 }
 
 function pickThumb(thumbnails = []) {
@@ -316,14 +647,6 @@ function normalizeManualLyricsEntry(entry) {
   }
 }
 
-async function getManualLyricsEntry(videoId) {
-  const id = String(videoId || '').trim()
-  if (!id) return null
-
-  const store = await getManualLyricsStore()
-  return normalizeManualLyricsEntry(store[id])
-}
-
 async function getSyncedLyricsSafe(query) {
   try {
     const body = await lrclib.findLyrics(query)
@@ -423,8 +746,13 @@ function dedupeById(list) {
   return output
 }
 
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, source: 'ytmusic' })
+app.get('/api/health', async (_req, res) => {
+  try {
+    await ensureDatabase()
+    res.json({ ok: true, source: 'ytmusic', storage: dbPool ? 'postgres' : 'json' })
+  } catch {
+    res.status(500).json({ ok: false, source: 'ytmusic', storage: 'postgres', error: 'Database connection error' })
+  }
 })
 
 app.get('/api/suggest', async (req, res) => {
@@ -489,7 +817,7 @@ app.get('/api/context', async (req, res) => {
   try {
     await ensureYtMusic()
 
-    const manualEntry = await getManualLyricsEntry(videoId)
+    const manualEntry = await getManualLyricsEntry(videoId, req)
     const [baseSong, remoteLyricsRaw] = await Promise.all([
       withTimeout(() => ytmusic.getSong(videoId), 6500, null),
       withTimeout(() => ytmusic.getLyrics(videoId), 6500, []),
@@ -547,6 +875,55 @@ app.get('/api/context', async (req, res) => {
   }
 })
 
+app.get('/api/manual-cover/:videoId', async (req, res) => {
+  const videoId = String(req.params.videoId || '').trim()
+  if (!videoId) {
+    return res.status(400).json({ error: 'Missing videoId parameter' })
+  }
+
+  try {
+    if (await ensureDatabase()) {
+      const result = await dbPool.query(
+        'SELECT cover_data, cover_mime, cover_hash, updated_at FROM manual_track_data WHERE video_id = $1',
+        [videoId]
+      )
+      const row = result.rows[0]
+
+      if (!row?.cover_data) {
+        return res.status(404).json({ error: 'Manual cover not found' })
+      }
+
+      const etag = row.cover_hash ? `"${row.cover_hash}"` : null
+      if (etag && req.get('if-none-match') === etag) {
+        return res.status(304).end()
+      }
+
+      if (etag) res.set('ETag', etag)
+      res.set('Content-Type', row.cover_mime || 'image/jpeg')
+      res.set('Cache-Control', 'public, max-age=31536000, immutable')
+      return res.send(row.cover_data)
+    }
+
+    const entry = await getManualLyricsEntry(videoId, req)
+    const thumbnail = String(entry?.thumbnail || '')
+    if (/^https?:\/\//i.test(thumbnail)) {
+      return res.redirect(thumbnail)
+    }
+
+    const cover = parseCoverInput(thumbnail)
+    if (!cover.buffer) {
+      return res.status(404).json({ error: 'Manual cover not found' })
+    }
+
+    if (cover.hash) res.set('ETag', `"${cover.hash}"`)
+    res.set('Content-Type', cover.mime || 'image/jpeg')
+    res.set('Cache-Control', 'public, max-age=31536000, immutable')
+    return res.send(cover.buffer)
+  } catch (error) {
+    res.status(error?.status || 500).json({ error: 'Manual cover read error' })
+  }
+})
+
 app.post('/api/manual-lyrics', async (req, res) => {
   const videoId = String(req.body?.videoId || '').trim()
   const title = String(req.body?.title || '').trim()
@@ -565,7 +942,7 @@ app.post('/api/manual-lyrics', async (req, res) => {
   }
 
   try {
-    const entry = normalizeManualLyricsEntry({
+    const entry = await saveManualLyricsEntry({
       videoId,
       title,
       artist,
@@ -574,19 +951,15 @@ app.post('/api/manual-lyrics', async (req, res) => {
       lines,
       thumbnail,
       updatedAt: new Date().toISOString(),
-    })
+    }, thumbnail)
 
     if (!entry) {
       return res.status(400).json({ error: 'Invalid lyric data' })
     }
 
-    const store = await getManualLyricsStore()
-    store[videoId] = entry
-    scheduleManualLyricsWrite()
-
     res.json({ item: entry })
-  } catch {
-    res.status(500).json({ error: 'Manual lyric save error' })
+  } catch (error) {
+    res.status(error?.status || 500).json({ error: error?.message || 'Manual lyric save error' })
   }
 })
 
@@ -598,42 +971,7 @@ app.delete('/api/manual-lyrics', async (req, res) => {
   }
 
   try {
-    const store = await getManualLyricsStore()
-    const existing = normalizeManualLyricsEntry(store[videoId])
-
-    if (!existing) {
-      delete store[videoId]
-    } else if (mode === 'thumbnail') {
-      const nextEntry = normalizeManualLyricsEntry({
-        ...existing,
-        thumbnail: '',
-        updatedAt: new Date().toISOString(),
-      })
-
-      if (nextEntry) {
-        store[videoId] = nextEntry
-      } else {
-        delete store[videoId]
-      }
-    } else if (mode === 'lyrics') {
-      const nextEntry = normalizeManualLyricsEntry({
-        ...existing,
-        lyrics: [],
-        lines: [],
-        updatedAt: new Date().toISOString(),
-      })
-
-      if (nextEntry) {
-        store[videoId] = nextEntry
-      } else {
-        delete store[videoId]
-      }
-    } else {
-      delete store[videoId]
-    }
-
-    scheduleManualLyricsWrite()
-
+    await deleteManualLyricsEntry(videoId, mode)
     res.json({ success: true })
   } catch {
     res.status(500).json({ error: 'Manual lyric delete error' })

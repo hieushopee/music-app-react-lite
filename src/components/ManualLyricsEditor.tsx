@@ -207,7 +207,7 @@ export function ManualLyricsEditor({
       const img = new Image()
       img.onload = async () => {
         const canvas = document.createElement('canvas')
-        const maxDim = 1080
+        const maxDim = 900
         let width = img.width
         let height = img.height
 
@@ -220,7 +220,10 @@ export function ManualLyricsEditor({
         canvas.width = width
         canvas.height = height
         canvas.getContext('2d')?.drawImage(img, 0, 0, width, height)
-        const compressed = canvas.toDataURL('image/jpeg', 0.95)
+        const webp = canvas.toDataURL('image/webp', 0.82)
+        const compressed = webp.startsWith('data:image/webp')
+          ? webp
+          : canvas.toDataURL('image/jpeg', 0.84)
 
         setSaving(true)
         setError('')

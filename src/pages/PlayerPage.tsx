@@ -151,8 +151,7 @@ export function PlayerPage() {
 
   async function handleSaveManual(payload: { lyrics: string[]; lines: SyncedLyricLine[]; thumbnail?: string }) {
     if (!currentTrack) return
-    const nextThumbnail = payload.thumbnail === undefined ? manualThumbnail : payload.thumbnail
-    await saveManualLyrics(currentTrack, payload.lyrics, payload.lines, state.apiBase, nextThumbnail)
+    await saveManualLyrics(currentTrack, payload.lyrics, payload.lines, state.apiBase, payload.thumbnail || '')
     if (payload.thumbnail) {
       actions.updateTrack(currentTrack.id, { thumbnail: payload.thumbnail })
     }

@@ -30,8 +30,9 @@ export function SettingsPage() {
       actions.setApiBase(normalized)
       setDraftBase(normalized)
       setStatusType('ok')
+      const storageLabel = result?.storage === 'postgres' ? 'Postgres' : 'JSON local'
       setStatus(
-        `Kết nối thành công: ${result?.source || 'ytmusic'} · test search OK (${result?.sampleCount || 0} kết quả mẫu) · đang dùng ${normalized || '/api'}`
+        `Kết nối thành công: ${result?.source || 'ytmusic'} · lưu bằng ${storageLabel} · test search OK (${result?.sampleCount || 0} kết quả mẫu) · đang dùng ${normalized || '/api'}`
       )
     } catch (error) {
       setStatusType('error')
