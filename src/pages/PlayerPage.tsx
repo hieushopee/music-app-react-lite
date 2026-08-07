@@ -28,6 +28,7 @@ export function PlayerPage() {
   const [error, setError] = useState('')
   const [editorOpen, setEditorOpen] = useState(false)
   const [contextVersion, setContextVersion] = useState(0)
+  const [remoteLyricsPollCount, setRemoteLyricsPollCount] = useState(0)
 
   useEffect(() => {
     if (!currentTrack) return
@@ -46,7 +47,8 @@ export function PlayerPage() {
         setSyncedLyrics(context.syncedLyrics)
         setHasManualSync(context.hasManualSync)
         setManualThumbnail(context.thumbnail || '')
-        setRemoteLyricsLoading(Boolean(context.loadingRemoteLyrics))
+        const stillWaitingForRemoteLyrics = Boolean(context.loadingRemoteLyrics && remoteLyricsPollCount < 12)
+        setRemoteLyricsLoading(stillWaitingForRemoteLyrics)
         const nextThumbnail = context.thumbnail || track.sourceThumbnail || ''
         if (nextThumbnail !== track.thumbnail) {
           actions.updateTrack(track.id, { thumbnail: nextThumbnail })
@@ -77,6 +79,7 @@ export function PlayerPage() {
     if (!currentTrack || !remoteLyricsLoading) return
 
     const timer = window.setTimeout(() => {
+      setRemoteLyricsPollCount((previous) => previous + 1)
       setContextVersion((previous) => previous + 1)
     }, 2500)
 
@@ -84,6 +87,11 @@ export function PlayerPage() {
       window.clearTimeout(timer)
     }
   }, [currentTrack?.id, remoteLyricsLoading])
+
+  useEffect(() => {
+    setRemoteLyricsPollCount(0)
+    setRemoteLyricsLoading(false)
+  }, [currentTrack?.id])
 
   useEffect(() => {
     document.body.classList.add('player-mode')

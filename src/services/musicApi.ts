@@ -318,7 +318,10 @@ function getCachedTrackContext(videoId: string) {
   const entry = store?.[videoId]
   if (!entry?.context) return null
 
-  return normalizeTrackContext(entry.context)
+  return {
+    ...normalizeTrackContext(entry.context),
+    loadingRemoteLyrics: false,
+  }
 }
 
 function saveTrackContext(videoId: string, context: unknown) {

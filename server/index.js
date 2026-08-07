@@ -50,6 +50,7 @@ let inMemoryStore = null
 let dbReadyPromise = null
 let importedLegacyLyrics = false
 const remoteLyricJobs = new Map()
+const remoteLyricJobStatus = new Map()
 const localLyricCache = new Map()
 
 async function withTimeout(task, timeoutMs, fallbackValue) {
@@ -914,10 +915,39 @@ function queueRemoteLyricRefresh(params) {
   const cacheKey = getLyricCacheKey(params.videoId)
   if (!cacheKey || remoteLyricJobs.has(cacheKey)) return
 
+  remoteLyricJobStatus.set(cacheKey, {
+    state: 'running',
+    startedAt: new Date().toISOString(),
+  })
+
   const job = fetchRemoteTrackContext(params)
-    .then(({ meta, context }) => saveRemoteLyricsCache(cacheKey, meta, context))
+    .then(async ({ meta, context }) => {
+      await saveRemoteLyricsCache(cacheKey, meta, context)
+      remoteLyricJobStatus.set(cacheKey, {
+        state: 'done',
+        source: context.lyricSource,
+        lyrics: context.lyrics.length,
+        syncedLyrics: context.syncedLyrics.length,
+        finishedAt: new Date().toISOString(),
+      })
+    })
     .catch((error) => {
-      console.error('Remote lyric refresh failed:', error instanceof Error ? error.message : error)
+      const message = error instanceof Error ? error.message : String(error)
+      console.error('Remote lyric refresh failed:', message)
+      remoteLyricJobStatus.set(cacheKey, {
+        state: 'failed',
+        error: message,
+        finishedAt: new Date().toISOString(),
+      })
+
+      return saveRemoteLyricsCache(cacheKey, {
+        title: params.titleHint,
+        artist: params.artistHint,
+        album: params.albumHint,
+        duration: params.durationHint,
+      }, createContextPayload({ lyricSource: 'none' })).catch((saveError) => {
+        console.error('Failed to save negative lyric cache:', saveError instanceof Error ? saveError.message : saveError)
+      })
     })
     .finally(() => {
       remoteLyricJobs.delete(cacheKey)
@@ -1049,6 +1079,67 @@ app.get('/api/context', async (req, res) => {
     )
   } catch {
     res.status(500).json({ error: 'YT Music context error' })
+  }
+})
+
+app.get('/api/context-status', async (req, res) => {
+  const videoId = String(req.query.videoId || '').trim()
+  if (!videoId) {
+    return res.status(400).json({ error: 'Missing videoId parameter' })
+  }
+
+  try {
+    const manualEntry = await getManualLyricsEntry(videoId, req)
+    let cache = null
+
+    if (await ensureDatabase()) {
+      const result = await dbPool.query(
+        `
+          SELECT source, jsonb_array_length(lyrics) AS lyric_count,
+                 jsonb_array_length(lines) AS synced_count,
+                 expires_at, updated_at
+          FROM lyric_cache
+          WHERE cache_key = $1
+        `,
+        [videoId]
+      )
+      const row = result.rows[0]
+      cache = row
+        ? {
+            source: row.source,
+            lyrics: Number(row.lyric_count || 0),
+            syncedLyrics: Number(row.synced_count || 0),
+            expiresAt: row.expires_at,
+            updatedAt: row.updated_at,
+          }
+        : null
+    } else {
+      const cached = localLyricCache.get(videoId)
+      cache = cached
+        ? {
+            source: cached.context?.lyricSource || 'none',
+            lyrics: cached.context?.lyrics?.length || 0,
+            syncedLyrics: cached.context?.syncedLyrics?.length || 0,
+            expiresAt: new Date(cached.expiresAt).toISOString(),
+          }
+        : null
+    }
+
+    res.json({
+      ok: true,
+      storage: dbPool ? 'postgres' : 'json',
+      videoId,
+      manual: {
+        hasLyrics: Boolean(manualEntry?.lyrics?.length || manualEntry?.lines?.length),
+        lyrics: manualEntry?.lyrics?.length || 0,
+        syncedLyrics: manualEntry?.lines?.length || 0,
+        hasThumbnail: Boolean(manualEntry?.thumbnail),
+      },
+      cache,
+      job: remoteLyricJobStatus.get(videoId) || null,
+    })
+  } catch {
+    res.status(500).json({ error: 'Context status error' })
   }
 })
 
