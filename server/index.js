@@ -31,6 +31,7 @@ const maxRemoteLyricJobStatus = Number(process.env.MAX_REMOTE_LYRIC_JOB_STATUS |
 const maxLocalLyricCacheEntries = Number(process.env.MAX_LOCAL_LYRIC_CACHE_ENTRIES || 200)
 const serverResponseCacheTtlMs = Number(process.env.SERVER_RESPONSE_CACHE_TTL_MINUTES || 30) * 60 * 1000
 const maxServerResponseCacheEntries = Number(process.env.MAX_SERVER_RESPONSE_CACHE_ENTRIES || 300)
+const ytMusicRequestTimeoutMs = Math.max(1000, Number(process.env.YTMUSIC_REQUEST_TIMEOUT_MS || 7000) || 7000)
 const lyricCacheCleanupIntervalMs = Number(process.env.LYRIC_CACHE_CLEANUP_INTERVAL_HOURS || 12) * 60 * 60 * 1000
 const shouldImportLegacyManualLyrics = process.env.IMPORT_LEGACY_MANUAL_LYRICS === 'true'
 const { Pool } = pg
@@ -218,6 +219,25 @@ async function withTimeout(task, timeoutMs, fallbackValue) {
     ])
   } catch {
     return fallbackValue
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+async function withRequestTimeout(task, timeoutMs = ytMusicRequestTimeoutMs) {
+  let timer = null
+
+  try {
+    return await Promise.race([
+      Promise.resolve().then(task),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error('Upstream request timed out')
+          error.status = 504
+          reject(error)
+        }, timeoutMs)
+      }),
+    ])
   } finally {
     if (timer) clearTimeout(timer)
   }
@@ -1164,12 +1184,12 @@ app.get('/api/suggest', async (req, res) => {
     if (cached) return res.json(cached)
 
     await ensureYtMusic()
-    const suggestions = await ytmusic.getSearchSuggestions(query)
+    const suggestions = await withRequestTimeout(() => ytmusic.getSearchSuggestions(query), 4500)
     const payload = { items: suggestions || [] }
     setServerResponseCache(cacheKey, payload)
     res.json(payload)
   } catch (error) {
-    res.status(500).json({ error: 'YT Music API suggest error' })
+    res.status(error?.status || 500).json({ error: 'YT Music API suggest error' })
   }
 })
 
@@ -1187,10 +1207,14 @@ app.get('/api/search', async (req, res) => {
     await ensureYtMusic()
 
     const [songsResult, videosResult, mixedResult] = await Promise.allSettled([
-      ytmusic.searchSongs(query),
-      ytmusic.searchVideos(query),
-      ytmusic.search(query),
+      withRequestTimeout(() => ytmusic.searchSongs(query)),
+      withRequestTimeout(() => ytmusic.searchVideos(query)),
+      withRequestTimeout(() => ytmusic.search(query)),
     ])
+
+    if (songsResult.status === 'rejected' && videosResult.status === 'rejected' && mixedResult.status === 'rejected') {
+      throw songsResult.reason || videosResult.reason || mixedResult.reason
+    }
 
     const songs = songsResult.status === 'fulfilled' ? songsResult.value : []
     const videos = videosResult.status === 'fulfilled' ? videosResult.value : []
@@ -1207,8 +1231,8 @@ app.get('/api/search', async (req, res) => {
     const payload = { items: ranked }
     setServerResponseCache(cacheKey, payload)
     res.json(payload)
-  } catch {
-    res.status(500).json({ error: 'YT Music API error' })
+  } catch (error) {
+    res.status(error?.status || 500).json({ error: 'YT Music API error' })
   }
 })
 
@@ -1445,7 +1469,7 @@ app.get('/api/artist', async (req, res) => {
 
     await ensureYtMusic()
 
-    const results = await ytmusic.searchArtists(query)
+    const results = await withRequestTimeout(() => ytmusic.searchArtists(query), 5000)
     const ranked = (results || [])
       .map((artist, index) => ({
         normalized: normalizeArtist(artist, query),
@@ -1464,8 +1488,8 @@ app.get('/api/artist', async (req, res) => {
     const payload = { item: ranked.normalized }
     setServerResponseCache(cacheKey, payload)
     res.json(payload)
-  } catch {
-    res.status(500).json({ error: 'YT Music artist error' })
+  } catch (error) {
+    res.status(error?.status || 500).json({ error: 'YT Music artist error' })
   }
 })
 
@@ -1482,7 +1506,7 @@ app.get('/api/albums', async (req, res) => {
 
     await ensureYtMusic()
 
-    const albums = await ytmusic.searchAlbums(query)
+    const albums = await withRequestTimeout(() => ytmusic.searchAlbums(query), 6000)
     const items = (albums || []).slice(0, 20).map((album) => ({
       albumId: album.albumId || '',
       playlistId: album.playlistId || '',
@@ -1496,8 +1520,8 @@ app.get('/api/albums', async (req, res) => {
     const payload = { items }
     setServerResponseCache(cacheKey, payload)
     res.json(payload)
-  } catch {
-    res.status(500).json({ error: 'YT Music albums error' })
+  } catch (error) {
+    res.status(error?.status || 500).json({ error: 'YT Music albums error' })
   }
 })
 
@@ -1514,7 +1538,7 @@ app.get('/api/album/:id', async (req, res) => {
 
     await ensureYtMusic()
 
-    const album = await ytmusic.getAlbum(albumId)
+    const album = await withRequestTimeout(() => ytmusic.getAlbum(albumId), 7000)
     if (!album) {
       return res.status(404).json({ error: 'Album not found' })
     }
@@ -1530,8 +1554,8 @@ app.get('/api/album/:id', async (req, res) => {
     }
     setServerResponseCache(cacheKey, payload)
     res.json(payload)
-  } catch {
-    res.status(500).json({ error: 'YT Music album error' })
+  } catch (error) {
+    res.status(error?.status || 500).json({ error: 'YT Music album error' })
   }
 })
 

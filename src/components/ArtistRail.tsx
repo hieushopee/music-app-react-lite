@@ -55,7 +55,8 @@ const BLOCKED_ARTIST_TERMS = [
 ]
 
 const SHORT_ARTIST_ALLOWLIST = new Set(['vu'])
-const MAX_ARTIST_PROFILES = 18
+const MAX_ARTIST_PROFILES = 10
+const ARTIST_LOAD_DELAY_MS = 900
 
 export function ArtistRail() {
   const navigate = useNavigate()
@@ -114,10 +115,13 @@ export function ArtistRail() {
       )
     }
 
-    loadArtists()
+    const timer = window.setTimeout(() => {
+      loadArtists()
+    }, ARTIST_LOAD_DELAY_MS)
 
     return () => {
       cancelled = true
+      window.clearTimeout(timer)
     }
   }, [artistQueries, state.apiBase])
 

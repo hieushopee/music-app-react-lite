@@ -29,6 +29,8 @@ const sectionQueries = [
   { key: 'motion', title: 'Tăng năng lượng', subtitle: 'Danh mục cho lúc di chuyển', queries: ['Workout music mix', 'EDM viet remix', 'Nhạc chạy bộ', 'Vinahouse 2026'] },
 ]
 
+const ALBUM_LOAD_DELAY_MS = 700
+
 function shuffle<T>(array: T[]): T[] {
   const arr = [...array]
   for (let i = arr.length - 1; i > 0; i--) {
@@ -121,11 +123,12 @@ export function HomePage() {
         const seen = new Set<string>()
 
         const selectedQueries = shuffle(albumQueries).slice(0, 3)
-        const results = await Promise.all(
+        const results = await Promise.allSettled(
           selectedQueries.map((q) => searchAlbums(q, state.apiBase))
         )
 
-        for (const batch of results) {
+        for (const result of results) {
+          const batch = result.status === 'fulfilled' ? result.value : []
           for (const album of batch) {
             if (!seen.has(album.albumId)) {
               seen.add(album.albumId)
@@ -146,8 +149,14 @@ export function HomePage() {
       }
     }
 
-    loadAlbums()
-    return () => { cancelled = true }
+    const timer = window.setTimeout(() => {
+      loadAlbums()
+    }, ALBUM_LOAD_DELAY_MS)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
   }, [state.apiBase])
 
   useEffect(() => {
@@ -158,7 +167,7 @@ export function HomePage() {
       setSectionsError('')
 
       try {
-        const results = await Promise.all(
+        const results = await Promise.allSettled(
           sectionQueries.map(async (section) => {
             const randomQuery = section.queries[Math.floor(Math.random() * section.queries.length)]
             const items = await searchMusic(randomQuery, state.apiBase)
@@ -167,9 +176,16 @@ export function HomePage() {
         )
 
         if (cancelled) return
+        const fulfilledResults = results
+          .filter((result): result is PromiseFulfilledResult<readonly [string, Track[]]> => result.status === 'fulfilled')
+          .map((result) => result.value)
+
+        if (!fulfilledResults.length) {
+          throw new Error('Không tải được danh mục nhạc.')
+        }
 
         startTransition(() => {
-          setSections(Object.fromEntries(results))
+          setSections(Object.fromEntries(fulfilledResults))
         })
       } catch {
         if (!cancelled) {
@@ -198,10 +214,11 @@ export function HomePage() {
       const allAlbums: Album[] = []
       const seen = new Set<string>()
       const selectedQueries = shuffle(albumQueries).slice(0, 3)
-      const results = await Promise.all(
+      const results = await Promise.allSettled(
         selectedQueries.map((q) => searchAlbums(q, state.apiBase))
       )
-      for (const batch of results) {
+      for (const result of results) {
+        const batch = result.status === 'fulfilled' ? result.value : []
         for (const album of batch) {
           if (!seen.has(album.albumId)) {
             seen.add(album.albumId)
