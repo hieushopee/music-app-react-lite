@@ -73,10 +73,10 @@ export function PlayerPage() {
     return () => {
       cancelled = true
     }
-  }, [currentTrack?.id, state.apiBase, contextVersion])
+  }, [currentTrack?.id, state.apiBase, contextVersion, remoteLyricsPollCount])
 
   useEffect(() => {
-    if (!currentTrack || !remoteLyricsLoading) return
+    if (!currentTrack || !remoteLyricsLoading || remoteLyricsPollCount >= 12) return
 
     const timer = window.setTimeout(() => {
       setRemoteLyricsPollCount((previous) => previous + 1)
@@ -86,7 +86,7 @@ export function PlayerPage() {
     return () => {
       window.clearTimeout(timer)
     }
-  }, [currentTrack?.id, remoteLyricsLoading])
+  }, [currentTrack?.id, remoteLyricsLoading, remoteLyricsPollCount])
 
   useEffect(() => {
     setRemoteLyricsPollCount(0)
@@ -145,6 +145,14 @@ export function PlayerPage() {
     }
   }, [actions, currentTrack?.id])
 
+  const editorSeedLines = useMemo(
+    () =>
+      syncedLyrics.length
+        ? syncedLyrics.map((line) => ({ text: line.text, startTime: line.startTime }))
+        : lyrics.map((text) => ({ text, startTime: null })),
+    [syncedLyrics, lyrics]
+  )
+
   if (!currentTrack) {
     return (
       <main className="player-page player-page--empty">
@@ -163,13 +171,6 @@ export function PlayerPage() {
   const lines = buildLyricTimeline(syncedLyrics, lyrics, effectiveDuration || currentTrack.duration)
   const activeIndex = hasSyncedLyrics ? findActiveLyricIndex(lines, state.progress + lyricOffset) : -1
   const lyricsLoading = loading || (remoteLyricsLoading && !lines.length)
-  const editorSeedLines = useMemo(
-    () =>
-      syncedLyrics.length
-        ? syncedLyrics.map((line) => ({ text: line.text, startTime: line.startTime }))
-        : lyrics.map((text) => ({ text, startTime: null })),
-    [syncedLyrics, lyrics]
-  )
 
   const showLyricsEditorControl = Boolean(currentTrack)
 

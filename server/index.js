@@ -194,6 +194,12 @@ function setServerResponseCache(key, value, ttlMs = serverResponseCacheTtlMs) {
   }, maxServerResponseCacheEntries)
 }
 
+function buildResponseCacheKey(scope, value) {
+  const input = String(value || '').trim().toLowerCase()
+  const hash = crypto.createHash('sha256').update(input).digest('hex').slice(0, 24)
+  return `${scope}:${hash}`
+}
+
 async function cleanupExpiredLyricCache() {
   if (!dbPool) return 0
   const result = await dbPool.query('DELETE FROM lyric_cache WHERE expires_at <= NOW()')
@@ -221,7 +227,13 @@ async function ensureYtMusic() {
   if (!initPromise) {
     initPromise = ytmusic.initialize({ GL: 'VN', HL: 'vi' })
   }
-  return initPromise
+
+  try {
+    await initPromise
+  } catch (error) {
+    initPromise = null
+    throw error
+  }
 }
 
 function shouldUseDatabaseSsl(url) {
@@ -1147,7 +1159,7 @@ app.get('/api/suggest', async (req, res) => {
   }
 
   try {
-    const cacheKey = `suggest:${normalizeText(query)}`
+    const cacheKey = buildResponseCacheKey('suggest', query)
     const cached = getServerResponseCache(cacheKey)
     if (cached) return res.json(cached)
 
@@ -1168,7 +1180,7 @@ app.get('/api/search', async (req, res) => {
   }
 
   try {
-    const cacheKey = `search:${normalizeText(query)}`
+    const cacheKey = buildResponseCacheKey('search', query)
     const cached = getServerResponseCache(cacheKey)
     if (cached) return res.json(cached)
 
@@ -1427,7 +1439,7 @@ app.get('/api/artist', async (req, res) => {
   }
 
   try {
-    const cacheKey = `artist:${normalizeText(query)}`
+    const cacheKey = buildResponseCacheKey('artist', query)
     const cached = getServerResponseCache(cacheKey)
     if (cached) return res.json(cached)
 
@@ -1464,7 +1476,7 @@ app.get('/api/albums', async (req, res) => {
   }
 
   try {
-    const cacheKey = `albums:${normalizeText(query)}`
+    const cacheKey = buildResponseCacheKey('albums', query)
     const cached = getServerResponseCache(cacheKey)
     if (cached) return res.json(cached)
 
@@ -1496,7 +1508,7 @@ app.get('/api/album/:id', async (req, res) => {
   }
 
   try {
-    const cacheKey = `album:${albumId}`
+    const cacheKey = buildResponseCacheKey('album', albumId)
     const cached = getServerResponseCache(cacheKey)
     if (cached) return res.json(cached)
 
