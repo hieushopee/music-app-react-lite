@@ -24,6 +24,7 @@ export function PlayerPage() {
   const [hasManualSync, setHasManualSync] = useState(false)
   const [manualThumbnail, setManualThumbnail] = useState('')
   const [loading, setLoading] = useState(false)
+  const [remoteLyricsLoading, setRemoteLyricsLoading] = useState(false)
   const [error, setError] = useState('')
   const [editorOpen, setEditorOpen] = useState(false)
   const [contextVersion, setContextVersion] = useState(0)
@@ -45,6 +46,7 @@ export function PlayerPage() {
         setSyncedLyrics(context.syncedLyrics)
         setHasManualSync(context.hasManualSync)
         setManualThumbnail(context.thumbnail || '')
+        setRemoteLyricsLoading(Boolean(context.loadingRemoteLyrics))
         const nextThumbnail = context.thumbnail || track.sourceThumbnail || ''
         if (nextThumbnail !== track.thumbnail) {
           actions.updateTrack(track.id, { thumbnail: nextThumbnail })
@@ -55,6 +57,7 @@ export function PlayerPage() {
         setSyncedLyrics([])
         setHasManualSync(false)
         setManualThumbnail('')
+        setRemoteLyricsLoading(false)
         setError(reason instanceof Error ? reason.message : 'Không thể tải lời nhạc.')
       } finally {
         if (!cancelled) {
@@ -69,6 +72,18 @@ export function PlayerPage() {
       cancelled = true
     }
   }, [currentTrack?.id, state.apiBase, contextVersion])
+
+  useEffect(() => {
+    if (!currentTrack || !remoteLyricsLoading) return
+
+    const timer = window.setTimeout(() => {
+      setContextVersion((previous) => previous + 1)
+    }, 2500)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [currentTrack?.id, remoteLyricsLoading])
 
   useEffect(() => {
     document.body.classList.add('player-mode')
@@ -139,6 +154,7 @@ export function PlayerPage() {
   const hasSyncedLyrics = syncedLyrics.length > 0
   const lines = buildLyricTimeline(syncedLyrics, lyrics, effectiveDuration || currentTrack.duration)
   const activeIndex = hasSyncedLyrics ? findActiveLyricIndex(lines, state.progress + lyricOffset) : -1
+  const lyricsLoading = loading || (remoteLyricsLoading && !lines.length)
   const editorSeedLines = useMemo(
     () =>
       syncedLyrics.length
@@ -194,7 +210,7 @@ export function PlayerPage() {
           <LyricsView
             lines={lines}
             activeIndex={activeIndex}
-            loading={loading}
+            loading={lyricsLoading}
             error={error}
             synced={hasSyncedLyrics}
             onSeekLine={(line) => handleSeekLyricLine(line.start)}

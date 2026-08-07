@@ -20,6 +20,8 @@ const frontendDist = path.join(serverDir, '..', 'dist')
 const databaseUrl = String(process.env.DATABASE_URL || '').trim()
 const jsonBodyLimit = process.env.JSON_BODY_LIMIT || '6mb'
 const maxCoverBytes = Number(process.env.MAX_COVER_BYTES || 2 * 1024 * 1024)
+const lyricCacheTtlMs = Number(process.env.LYRIC_CACHE_TTL_DAYS || 60) * 24 * 60 * 60 * 1000
+const lyricNegativeCacheTtlMs = Number(process.env.LYRIC_NEGATIVE_CACHE_TTL_DAYS || 2) * 24 * 60 * 60 * 1000
 const { Pool } = pg
 const dbPool = databaseUrl
   ? new Pool({
@@ -47,6 +49,8 @@ let initPromise = null
 let inMemoryStore = null
 let dbReadyPromise = null
 let importedLegacyLyrics = false
+const remoteLyricJobs = new Map()
+const localLyricCache = new Map()
 
 async function withTimeout(task, timeoutMs, fallbackValue) {
   let timer = null
@@ -97,6 +101,24 @@ async function ensureDatabase() {
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `)
+
+      await dbPool.query(`
+        CREATE TABLE IF NOT EXISTS lyric_cache (
+          cache_key TEXT PRIMARY KEY,
+          video_id TEXT NOT NULL,
+          title TEXT NOT NULL DEFAULT '',
+          artist TEXT NOT NULL DEFAULT '',
+          album TEXT NOT NULL DEFAULT '',
+          duration_seconds INTEGER NOT NULL DEFAULT 0,
+          lyrics JSONB NOT NULL DEFAULT '[]'::jsonb,
+          lines JSONB NOT NULL DEFAULT '[]'::jsonb,
+          source TEXT NOT NULL DEFAULT 'none',
+          expires_at TIMESTAMPTZ NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `)
+      await dbPool.query('CREATE INDEX IF NOT EXISTS lyric_cache_video_idx ON lyric_cache (video_id)')
+      await dbPool.query('CREATE INDEX IF NOT EXISTS lyric_cache_expires_idx ON lyric_cache (expires_at)')
 
       await importLegacyManualLyricsIntoDatabase()
     })()
@@ -246,6 +268,123 @@ function parseJsonArray(value) {
   } catch {
     return []
   }
+}
+
+function createContextPayload({
+  lyrics = [],
+  syncedLyrics = [],
+  lyricSource = 'none',
+  canManualSync = true,
+  hasManualSync = false,
+  thumbnail = '',
+  loadingRemoteLyrics = false,
+} = {}) {
+  return {
+    lyrics: normalizeManualLyricsText(lyrics),
+    syncedLyrics: normalizeManualSyncedLyrics(syncedLyrics),
+    lyricSource,
+    canManualSync,
+    hasManualSync,
+    thumbnail: String(thumbnail || ''),
+    loadingRemoteLyrics,
+  }
+}
+
+function getLyricCacheKey(videoId) {
+  return String(videoId || '').trim()
+}
+
+function normalizeCachedLyricSource(value) {
+  return value === 'synced' || value === 'static' || value === 'none' ? value : 'none'
+}
+
+function getLyricCacheExpiresAt(source) {
+  const ttl = source === 'none' ? lyricNegativeCacheTtlMs : lyricCacheTtlMs
+  return new Date(Date.now() + Math.max(ttl, 60 * 60 * 1000))
+}
+
+function mapLyricCacheRow(row) {
+  if (!row) return null
+
+  return createContextPayload({
+    lyrics: parseJsonArray(row.lyrics),
+    syncedLyrics: parseJsonArray(row.lines),
+    lyricSource: normalizeCachedLyricSource(row.source),
+  })
+}
+
+async function getCachedRemoteLyrics(videoId) {
+  const cacheKey = getLyricCacheKey(videoId)
+  if (!cacheKey) return null
+
+  if (await ensureDatabase()) {
+    const result = await dbPool.query(
+      `
+        SELECT lyrics, lines, source
+        FROM lyric_cache
+        WHERE cache_key = $1
+          AND expires_at > NOW()
+      `,
+      [cacheKey]
+    )
+    return mapLyricCacheRow(result.rows[0])
+  }
+
+  const cached = localLyricCache.get(cacheKey)
+  if (!cached || cached.expiresAt <= Date.now()) {
+    localLyricCache.delete(cacheKey)
+    return null
+  }
+
+  return createContextPayload(cached.context)
+}
+
+async function saveRemoteLyricsCache(videoId, meta, context) {
+  const cacheKey = getLyricCacheKey(videoId)
+  if (!cacheKey) return
+
+  const payload = createContextPayload(context)
+  const source = normalizeCachedLyricSource(payload.lyricSource)
+  const expiresAt = getLyricCacheExpiresAt(source)
+
+  if (await ensureDatabase()) {
+    await dbPool.query(
+      `
+        INSERT INTO lyric_cache
+          (cache_key, video_id, title, artist, album, duration_seconds, lyrics, lines, source, expires_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, NOW())
+        ON CONFLICT (cache_key) DO UPDATE SET
+          video_id = EXCLUDED.video_id,
+          title = EXCLUDED.title,
+          artist = EXCLUDED.artist,
+          album = EXCLUDED.album,
+          duration_seconds = EXCLUDED.duration_seconds,
+          lyrics = EXCLUDED.lyrics,
+          lines = EXCLUDED.lines,
+          source = EXCLUDED.source,
+          expires_at = EXCLUDED.expires_at,
+          updated_at = NOW()
+      `,
+      [
+        cacheKey,
+        cacheKey,
+        String(meta?.title || ''),
+        String(meta?.artist || ''),
+        String(meta?.album || ''),
+        Math.round(Number(meta?.duration || 0) || 0),
+        JSON.stringify(payload.lyrics),
+        JSON.stringify(payload.syncedLyrics),
+        source,
+        expiresAt,
+      ]
+    )
+    return
+  }
+
+  localLyricCache.set(cacheKey, {
+    expiresAt: expiresAt.getTime(),
+    context: payload,
+  })
 }
 
 function mapManualLyricsRow(row, req = null) {
@@ -733,6 +872,60 @@ async function fetchTimedLyrics({ title, artist, album, duration }) {
   return []
 }
 
+async function fetchRemoteTrackContext({ videoId, artistHint, titleHint, albumHint, durationHint }) {
+  await ensureYtMusic()
+
+  const [baseSong, remoteLyricsRaw] = await Promise.all([
+    withTimeout(() => ytmusic.getSong(videoId), 4500, null),
+    withTimeout(() => ytmusic.getLyrics(videoId), 4500, []),
+  ])
+
+  const artist = String(baseSong?.artist?.name || artistHint || '').trim()
+  const title = String(baseSong?.name || titleHint || '').trim()
+  const album = String(baseSong?.album?.name || albumHint || '').trim()
+  const duration = parseDuration(baseSong?.duration || durationHint)
+  const syncedLyrics = await withTimeout(
+    () =>
+      fetchTimedLyrics({
+        title,
+        artist,
+        album,
+        duration,
+      }),
+    9000,
+    []
+  )
+  const lyrics = Array.isArray(remoteLyricsRaw)
+    ? remoteLyricsRaw.filter((line) => String(line || '').trim().length > 0)
+    : []
+  const lyricSource = syncedLyrics.length ? 'synced' : lyrics.length ? 'static' : 'none'
+
+  return {
+    meta: { title, artist, album, duration },
+    context: createContextPayload({
+      lyrics,
+      syncedLyrics,
+      lyricSource,
+    }),
+  }
+}
+
+function queueRemoteLyricRefresh(params) {
+  const cacheKey = getLyricCacheKey(params.videoId)
+  if (!cacheKey || remoteLyricJobs.has(cacheKey)) return
+
+  const job = fetchRemoteTrackContext(params)
+    .then(({ meta, context }) => saveRemoteLyricsCache(cacheKey, meta, context))
+    .catch((error) => {
+      console.error('Remote lyric refresh failed:', error instanceof Error ? error.message : error)
+    })
+    .finally(() => {
+      remoteLyricJobs.delete(cacheKey)
+    })
+
+  remoteLyricJobs.set(cacheKey, job)
+}
+
 function dedupeById(list) {
   const seen = new Set()
   const output = []
@@ -815,61 +1008,45 @@ app.get('/api/context', async (req, res) => {
   }
 
   try {
-    await ensureYtMusic()
-
     const manualEntry = await getManualLyricsEntry(videoId, req)
-    const [baseSong, remoteLyricsRaw] = await Promise.all([
-      withTimeout(() => ytmusic.getSong(videoId), 6500, null),
-      withTimeout(() => ytmusic.getLyrics(videoId), 6500, []),
-    ])
-
-    const artist = String(baseSong?.artist?.name || artistHint || '').trim()
-    const title = String(baseSong?.name || titleHint || '').trim()
-    const album = String(baseSong?.album?.name || albumHint || '').trim()
-    const duration = parseDuration(baseSong?.duration || durationHint)
     const manualLyrics = manualEntry?.lyrics || []
     const manualSyncedLyrics = manualEntry?.lines || []
-    const fetchedSyncedLyrics = manualSyncedLyrics.length
-      ? []
-      : await withTimeout(
-          () =>
-            fetchTimedLyrics({
-              title,
-              artist,
-              album,
-              duration,
-            }),
-          12000,
-          []
-        )
-    const mergedManualSyncedLyrics =
-      !manualSyncedLyrics.length && manualLyrics.length
-        ? mergeManualLyricsIntoSyncedLyrics(manualLyrics, fetchedSyncedLyrics)
-        : []
-    const syncedLyrics = manualSyncedLyrics.length
-      ? manualSyncedLyrics
-      : mergedManualSyncedLyrics.length
-        ? mergedManualSyncedLyrics
-        : manualLyrics.length
-          ? []
-          : fetchedSyncedLyrics
+    const thumbnail = manualEntry?.thumbnail || ''
 
-    const remoteLyrics = Array.isArray(remoteLyricsRaw)
-      ? remoteLyricsRaw.filter((line) => String(line || '').trim().length > 0)
-      : []
-    const lyrics = manualLyrics.length ? manualLyrics : remoteLyrics
+    if (manualLyrics.length || manualSyncedLyrics.length) {
+      return res.json(
+        createContextPayload({
+          lyrics: manualLyrics,
+          syncedLyrics: manualSyncedLyrics,
+          lyricSource: 'manual',
+          hasManualSync: true,
+          thumbnail,
+        })
+      )
+    }
 
-    const lyricSource = manualLyrics.length || manualSyncedLyrics.length ? 'manual' : syncedLyrics.length ? 'synced' : lyrics.length ? 'static' : 'none'
-    const canManualSync = true
+    const cachedContext = await getCachedRemoteLyrics(videoId)
+    if (cachedContext) {
+      return res.json({
+        ...cachedContext,
+        thumbnail,
+      })
+    }
 
-    res.json({
-      lyrics,
-      syncedLyrics,
-      lyricSource,
-      canManualSync,
-      hasManualSync: Boolean(manualLyrics.length || manualSyncedLyrics.length),
-      thumbnail: manualEntry?.thumbnail || '',
+    queueRemoteLyricRefresh({
+      videoId,
+      artistHint,
+      titleHint,
+      albumHint,
+      durationHint,
     })
+
+    return res.json(
+      createContextPayload({
+        thumbnail,
+        loadingRemoteLyrics: true,
+      })
+    )
   } catch {
     res.status(500).json({ error: 'YT Music context error' })
   }

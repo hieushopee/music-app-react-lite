@@ -29,6 +29,7 @@ export interface TrackContext {
   canManualSync: boolean
   hasManualSync: boolean
   thumbnail?: string
+  loadingRemoteLyrics?: boolean
 }
 
 const TRACK_CONTEXT_CACHE_KEY = 'pulseframe-track-context-cache-v1'
@@ -233,6 +234,7 @@ function createEmptyTrackContext(): TrackContext {
     lyricSource: 'none',
     canManualSync: false,
     hasManualSync: false,
+    loadingRemoteLyrics: false,
   }
 }
 
@@ -246,6 +248,7 @@ function normalizeTrackContext(data: unknown): TrackContext {
     canManualSync: Boolean(candidate?.canManualSync),
     hasManualSync: Boolean(candidate?.hasManualSync),
     thumbnail: typeof candidate?.thumbnail === 'string' ? candidate.thumbnail : '',
+    loadingRemoteLyrics: Boolean(candidate?.loadingRemoteLyrics),
   }
 }
 
@@ -320,11 +323,15 @@ function getCachedTrackContext(videoId: string) {
 
 function saveTrackContext(videoId: string, context: unknown) {
   const normalized = normalizeTrackContext(context)
+  const storedContext = {
+    ...normalized,
+    loadingRemoteLyrics: false,
+  }
   const store = {
     ...readTrackContextCacheStore(),
     [videoId]: {
       savedAt: Date.now(),
-      context: normalized,
+      context: storedContext,
     },
   }
 
@@ -539,4 +546,3 @@ export async function fetchAlbumDetail(albumId: string, baseOverride = ''): Prom
     songs: normalizeTrackList(data.songs),
   }
 }
-
