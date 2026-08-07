@@ -61,6 +61,7 @@ export function ManualLyricsEditor({
   const [resettingLyrics, setResettingLyrics] = useState(false)
   const [checkedLineIndexes, setCheckedLineIndexes] = useState<number[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const selectAllRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!open) return
@@ -84,8 +85,16 @@ export function ManualLyricsEditor({
   const missingCount = useMemo(() => draftLines.filter((line) => line.startTime === null).length, [draftLines])
   const hasLyrics = draftLines.length > 0
   const allStamped = hasLyrics && draftLines.every((line) => line.startTime !== null)
+  const allLinesChecked = hasLyrics && checkedLineIndexes.length === draftLines.length
+  const partiallyChecked = checkedLineIndexes.length > 0 && !allLinesChecked
   const selectedTargetCount = checkedLineIndexes.length
   const saveLabel = allStamped ? 'Lưu lời chạy' : 'Lưu lyrics'
+
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = partiallyChecked
+    }
+  }, [partiallyChecked])
 
   if (!open || !track) return null
 
@@ -134,6 +143,13 @@ export function ManualLyricsEditor({
       }
 
       return [...previous, index].sort((a, b) => a - b)
+    })
+  }
+
+  function handleToggleAllChecked() {
+    setCheckedLineIndexes((previous) => {
+      if (previous.length === draftLines.length) return []
+      return draftLines.map((_, index) => index)
     })
   }
 
@@ -425,7 +441,16 @@ export function ManualLyricsEditor({
 
             <div className="manual-lyrics-editor__status">
               <span>Còn {missingCount} dòng chưa gán</span>
-              {selectedTargetCount ? <span>Đã chọn {selectedTargetCount} dòng</span> : null}
+              <label className="manual-lyrics-editor__select-all">
+                <input
+                  ref={selectAllRef}
+                  type="checkbox"
+                  checked={allLinesChecked}
+                  onChange={handleToggleAllChecked}
+                  disabled={!hasLyrics}
+                />
+                <span>Chọn tất cả</span>
+              </label>
             </div>
 
             {error ? <p className="feedback error">{error}</p> : null}

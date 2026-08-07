@@ -1661,6 +1661,29 @@ code {
   text-align: right;
 }
 
+.manual-lyrics-editor__select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.manual-lyrics-editor__select-all input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #8fecc5;
+  cursor: pointer;
+}
+
+.manual-lyrics-editor__select-all input:disabled,
+.manual-lyrics-editor__select-all input:disabled+span {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .manual-lyrics-editor__status strong {
   color: #fff3d0;
 }
