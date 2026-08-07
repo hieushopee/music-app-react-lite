@@ -17,6 +17,7 @@ dist-ssr
 tmp/
 server/*.exe
 server/*-player-script.js
+server/data/manual-lyrics.json
 server/data/dl_*
 server/data/temp_*
 

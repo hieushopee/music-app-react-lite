@@ -95,6 +95,7 @@ export function HomePage() {
 
   // Debounced suggestions
   useEffect(() => {
+    let cancelled = false
     const trimmed = query.trim()
     if (!trimmed) {
       setSuggestions([])
@@ -102,9 +103,12 @@ export function HomePage() {
     }
     const timer = setTimeout(async () => {
       const results = await getSearchSuggestions(trimmed, state.apiBase)
-      setSuggestions(results)
+      if (!cancelled) setSuggestions(results)
     }, 300)
-    return () => clearTimeout(timer)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
   }, [query, state.apiBase])
 
   useEffect(() => {

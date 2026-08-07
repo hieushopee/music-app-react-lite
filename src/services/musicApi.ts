@@ -88,20 +88,21 @@ function withAdminHeaders(headers: Record<string, string> = {}) {
 
 function buildCandidates(baseOverride = '') {
   const configured = getConfiguredApiBase()
-  const candidates = [normalizeApiBase(baseOverride), configured]
+  const candidates = [normalizeApiBase(baseOverride), configured, '']
 
   if (typeof window !== 'undefined') {
     const { protocol, hostname, port } = window.location
 
     if (protocol === 'http:' || protocol === 'https:') {
-      candidates.push(`${protocol}//${hostname}:5174`)
       if (port === '5174') {
         candidates.push(`${protocol}//${window.location.host}`)
+      } else if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        candidates.push(`${protocol}//${hostname}:5174`)
       }
     }
   }
 
-  candidates.push('', 'http://127.0.0.1:5174', 'http://localhost:5174')
+  candidates.push('http://127.0.0.1:5174', 'http://localhost:5174')
 
   const unique: string[] = []
   const seen = new Set<string>()

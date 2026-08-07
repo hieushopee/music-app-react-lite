@@ -235,18 +235,23 @@ export function ManualLyricsEditor({
   }
 
   function handleFileSelect(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]
+    const input = event.currentTarget
+    const file = input.files?.[0]
     if (!file) return
 
     if (!file.type.startsWith('image/')) {
       setError('Vui lòng chọn tệp hình ảnh.')
-      event.target.value = ''
+      input.value = ''
       return
     }
 
     const reader = new FileReader()
     reader.onload = async (e) => {
       const img = new Image()
+      img.onerror = () => {
+        setError('Không đọc được ảnh bìa. Hãy thử một file ảnh khác.')
+        input.value = ''
+      }
       img.onload = async () => {
         const canvas = document.createElement('canvas')
         const maxDim = 900
@@ -277,10 +282,14 @@ export function ManualLyricsEditor({
           setError(reason instanceof Error ? reason.message : 'Không lưu được ảnh bìa.')
         } finally {
           setSaving(false)
-          event.target.value = ''
+          input.value = ''
         }
       }
       img.src = e.target?.result as string
+    }
+    reader.onerror = () => {
+      setError('Không đọc được tệp ảnh bìa.')
+      input.value = ''
     }
     reader.readAsDataURL(file)
   }

@@ -554,7 +554,11 @@ if (typeof window !== 'undefined') {
       apiBase: state.apiBase,
       lyricOffsets: state.lyricOffsets,
     }
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
+    } catch {
+      // Ignore persistence failures so playback controls keep working.
+    }
   })
 }
 

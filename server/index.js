@@ -29,6 +29,9 @@ const apiRateLimitMax = Number(process.env.API_RATE_LIMIT_PER_MINUTE || 240)
 const writeRateLimitMax = Number(process.env.WRITE_RATE_LIMIT_PER_MINUTE || 30)
 const maxRemoteLyricJobStatus = Number(process.env.MAX_REMOTE_LYRIC_JOB_STATUS || 300)
 const maxLocalLyricCacheEntries = Number(process.env.MAX_LOCAL_LYRIC_CACHE_ENTRIES || 200)
+const serverResponseCacheTtlMs = Number(process.env.SERVER_RESPONSE_CACHE_TTL_MINUTES || 30) * 60 * 1000
+const maxServerResponseCacheEntries = Number(process.env.MAX_SERVER_RESPONSE_CACHE_ENTRIES || 300)
+const lyricCacheCleanupIntervalMs = Number(process.env.LYRIC_CACHE_CLEANUP_INTERVAL_HOURS || 12) * 60 * 60 * 1000
 const { Pool } = pg
 const dbPool = databaseUrl
   ? new Pool({
@@ -61,6 +64,7 @@ app.use('/api/context-status', createRateLimiter({
   max: writeRateLimitMax,
   windowMs: 60 * 1000,
 }))
+app.use('/api/context-status', requireAdminToken)
 app.use(express.json({ limit: jsonBodyLimit }))
 app.use(express.static(frontendDist))
 
@@ -81,6 +85,7 @@ let importedLegacyLyrics = false
 const remoteLyricJobs = new Map()
 const remoteLyricJobStatus = new Map()
 const localLyricCache = new Map()
+const serverResponseCache = new Map()
 
 function normalizeOrigin(value) {
   try {
@@ -167,6 +172,33 @@ function rememberLimited(map, key, value, limit) {
   }
 }
 
+function getServerResponseCache(key) {
+  const cached = serverResponseCache.get(key)
+  if (!cached) return null
+
+  if (cached.expiresAt <= Date.now()) {
+    serverResponseCache.delete(key)
+    return null
+  }
+
+  return cached.value
+}
+
+function setServerResponseCache(key, value, ttlMs = serverResponseCacheTtlMs) {
+  if (!ttlMs || ttlMs <= 0) return
+
+  rememberLimited(serverResponseCache, key, {
+    value,
+    expiresAt: Date.now() + ttlMs,
+  }, maxServerResponseCacheEntries)
+}
+
+async function cleanupExpiredLyricCache() {
+  if (!dbPool) return 0
+  const result = await dbPool.query('DELETE FROM lyric_cache WHERE expires_at <= NOW()')
+  return result.rowCount || 0
+}
+
 async function withTimeout(task, timeoutMs, fallbackValue) {
   let timer = null
 
@@ -234,6 +266,7 @@ async function ensureDatabase() {
       `)
       await dbPool.query('CREATE INDEX IF NOT EXISTS lyric_cache_video_idx ON lyric_cache (video_id)')
       await dbPool.query('CREATE INDEX IF NOT EXISTS lyric_cache_expires_idx ON lyric_cache (expires_at)')
+      await cleanupExpiredLyricCache()
 
       await importLegacyManualLyricsIntoDatabase()
     })()
@@ -1111,9 +1144,15 @@ app.get('/api/suggest', async (req, res) => {
   }
 
   try {
+    const cacheKey = `suggest:${normalizeText(query)}`
+    const cached = getServerResponseCache(cacheKey)
+    if (cached) return res.json(cached)
+
     await ensureYtMusic()
     const suggestions = await ytmusic.getSearchSuggestions(query)
-    res.json({ items: suggestions || [] })
+    const payload = { items: suggestions || [] }
+    setServerResponseCache(cacheKey, payload)
+    res.json(payload)
   } catch (error) {
     res.status(500).json({ error: 'YT Music API suggest error' })
   }
@@ -1126,6 +1165,10 @@ app.get('/api/search', async (req, res) => {
   }
 
   try {
+    const cacheKey = `search:${normalizeText(query)}`
+    const cached = getServerResponseCache(cacheKey)
+    if (cached) return res.json(cached)
+
     await ensureYtMusic()
 
     const [songsResult, videosResult, mixedResult] = await Promise.allSettled([
@@ -1146,7 +1189,9 @@ app.get('/api/search', async (req, res) => {
       .slice(0, 30)
       .map(({ score, rank, ...item }) => item)
 
-    res.json({ items: ranked })
+    const payload = { items: ranked }
+    setServerResponseCache(cacheKey, payload)
+    res.json(payload)
   } catch {
     res.status(500).json({ error: 'YT Music API error' })
   }
@@ -1379,6 +1424,10 @@ app.get('/api/artist', async (req, res) => {
   }
 
   try {
+    const cacheKey = `artist:${normalizeText(query)}`
+    const cached = getServerResponseCache(cacheKey)
+    if (cached) return res.json(cached)
+
     await ensureYtMusic()
 
     const results = await ytmusic.searchArtists(query)
@@ -1392,10 +1441,14 @@ app.get('/api/artist', async (req, res) => {
       .sort((a, b) => b.score - a.score || a.rank - b.rank)[0]
 
     if (!ranked || ranked.score < 120) {
-      return res.json({ item: null })
+      const payload = { item: null }
+      setServerResponseCache(cacheKey, payload)
+      return res.json(payload)
     }
 
-    res.json({ item: ranked.normalized })
+    const payload = { item: ranked.normalized }
+    setServerResponseCache(cacheKey, payload)
+    res.json(payload)
   } catch {
     res.status(500).json({ error: 'YT Music artist error' })
   }
@@ -1408,6 +1461,10 @@ app.get('/api/albums', async (req, res) => {
   }
 
   try {
+    const cacheKey = `albums:${normalizeText(query)}`
+    const cached = getServerResponseCache(cacheKey)
+    if (cached) return res.json(cached)
+
     await ensureYtMusic()
 
     const albums = await ytmusic.searchAlbums(query)
@@ -1421,7 +1478,9 @@ app.get('/api/albums', async (req, res) => {
       thumbnail: upscaleThumbnail(pickThumb(album.thumbnails || [])),
     })).filter(a => a.albumId)
 
-    res.json({ items })
+    const payload = { items }
+    setServerResponseCache(cacheKey, payload)
+    res.json(payload)
   } catch {
     res.status(500).json({ error: 'YT Music albums error' })
   }
@@ -1434,6 +1493,10 @@ app.get('/api/album/:id', async (req, res) => {
   }
 
   try {
+    const cacheKey = `album:${albumId}`
+    const cached = getServerResponseCache(cacheKey)
+    if (cached) return res.json(cached)
+
     await ensureYtMusic()
 
     const album = await ytmusic.getAlbum(albumId)
@@ -1443,13 +1506,15 @@ app.get('/api/album/:id', async (req, res) => {
 
     const songs = (album.songs || []).map(normalizeSong).filter(Boolean)
 
-    res.json({
+    const payload = {
       name: String(album.name || 'Unknown album'),
       artist: String(album.artist?.name || 'Unknown artist'),
       year: album.year || null,
       thumbnail: upscaleThumbnail(pickThumb(album.thumbnails || [])),
       songs,
-    })
+    }
+    setServerResponseCache(cacheKey, payload)
+    res.json(payload)
   } catch {
     res.status(500).json({ error: 'YT Music album error' })
   }
@@ -1459,11 +1524,25 @@ app.listen(port, '0.0.0.0', () => {
   console.log(`YT Music API listening on http://0.0.0.0:${port}`)
 })
 
-// Prevent unhandled errors from crashing the process
+if (dbPool && lyricCacheCleanupIntervalMs > 0) {
+  const cleanupTimer = setInterval(() => {
+    cleanupExpiredLyricCache().catch((error) => {
+      console.error('Lyric cache cleanup failed:', error instanceof Error ? error.message : error)
+    })
+  }, lyricCacheCleanupIntervalMs)
+  cleanupTimer.unref?.()
+}
+
+function exitAfterFatalError() {
+  setTimeout(() => process.exit(1), 100).unref?.()
+}
+
 process.on('uncaughtException', (err) => {
   console.error('[uncaughtException]', err.message)
+  exitAfterFatalError()
 })
 
 process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection]', reason instanceof Error ? reason.message : reason)
+  exitAfterFatalError()
 })
