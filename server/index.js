@@ -32,6 +32,7 @@ const maxLocalLyricCacheEntries = Number(process.env.MAX_LOCAL_LYRIC_CACHE_ENTRI
 const serverResponseCacheTtlMs = Number(process.env.SERVER_RESPONSE_CACHE_TTL_MINUTES || 30) * 60 * 1000
 const maxServerResponseCacheEntries = Number(process.env.MAX_SERVER_RESPONSE_CACHE_ENTRIES || 300)
 const lyricCacheCleanupIntervalMs = Number(process.env.LYRIC_CACHE_CLEANUP_INTERVAL_HOURS || 12) * 60 * 60 * 1000
+const shouldImportLegacyManualLyrics = process.env.IMPORT_LEGACY_MANUAL_LYRICS === 'true'
 const { Pool } = pg
 const dbPool = databaseUrl
   ? new Pool({
@@ -268,7 +269,9 @@ async function ensureDatabase() {
       await dbPool.query('CREATE INDEX IF NOT EXISTS lyric_cache_expires_idx ON lyric_cache (expires_at)')
       await cleanupExpiredLyricCache()
 
-      await importLegacyManualLyricsIntoDatabase()
+      if (shouldImportLegacyManualLyrics) {
+        await importLegacyManualLyricsIntoDatabase()
+      }
     })()
   }
 
