@@ -9,16 +9,28 @@ interface LyricsLineRowProps {
   line: DraftLyricLine
   index: number
   isSelected: boolean
+  isChecked: boolean
   editMode: boolean
   onSelect: (index: number) => void
+  onToggleChecked: (index: number) => void
   onTickTime: (index: number, delta: number) => void
   onUpdateText: (index: number, text: string) => void
 }
 
-export function LyricsLineRow({ line, index, isSelected, editMode, onSelect, onTickTime, onUpdateText }: LyricsLineRowProps) {
+export function LyricsLineRow({
+  line,
+  index,
+  isSelected,
+  isChecked,
+  editMode,
+  onSelect,
+  onToggleChecked,
+  onTickTime,
+  onUpdateText,
+}: LyricsLineRowProps) {
   return (
     <div
-      className={`manual-lyrics-editor__row${isSelected ? ' is-selected' : ''}${line.startTime !== null ? ' is-complete' : ''}`}
+      className={`manual-lyrics-editor__row${isSelected ? ' is-selected' : ''}${isChecked ? ' is-checked' : ''}${line.startTime !== null ? ' is-complete' : ''}`}
       onClick={() => onSelect(index)}
       role="button"
       tabIndex={0}
@@ -37,6 +49,14 @@ export function LyricsLineRow({ line, index, isSelected, editMode, onSelect, onT
         <span className="manual-lyrics-editor__row-text">{line.text}</span>
       )}
       <span className="manual-lyrics-editor__row-time-group" onClick={(e) => e.stopPropagation()}>
+        <input
+          className="manual-lyrics-editor__row-check"
+          type="checkbox"
+          checked={isChecked}
+          onChange={() => onToggleChecked(index)}
+          onKeyDown={(event) => event.stopPropagation()}
+          aria-label={`Chọn dòng ${index + 1}`}
+        />
         <span className="manual-lyrics-editor__row-time" title="Thời gian dòng này">
           {line.startTime === null ? '--:--.-' : formatEditorTime(line.startTime)}
         </span>

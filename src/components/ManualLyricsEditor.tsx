@@ -59,6 +59,7 @@ export function ManualLyricsEditor({
   const [customThumbnail, setCustomThumbnail] = useState('')
   const [resettingCover, setResettingCover] = useState(false)
   const [resettingLyrics, setResettingLyrics] = useState(false)
+  const [checkedLineIndexes, setCheckedLineIndexes] = useState<number[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -74,12 +75,16 @@ export function ManualLyricsEditor({
     setResettingCover(false)
     setResettingLyrics(false)
     setCustomThumbnail('')
+    setCheckedLineIndexes([])
   }, [open, initialLines, track?.id])
 
   const selectedLine = draftLines[selectedIndex] || null
+  const checkedLineIndexSet = useMemo(() => new Set(checkedLineIndexes), [checkedLineIndexes])
+  const targetLineIndexes = checkedLineIndexes.length ? checkedLineIndexes : selectedLine ? [selectedIndex] : []
   const missingCount = useMemo(() => draftLines.filter((line) => line.startTime === null).length, [draftLines])
   const hasLyrics = draftLines.length > 0
   const allStamped = hasLyrics && draftLines.every((line) => line.startTime !== null)
+  const selectedTargetCount = checkedLineIndexes.length
   const saveLabel = allStamped ? 'Lưu lời chạy' : 'Lưu lyrics'
 
   if (!open || !track) return null
@@ -115,6 +120,23 @@ export function ManualLyricsEditor({
     )
   }
 
+  function updateTargetLines(updater: (line: DraftLyricLine, index: number) => DraftLyricLine) {
+    const targets = new Set(targetLineIndexes)
+    if (!targets.size) return
+
+    setDraftLines((previous) => previous.map((line, index) => (targets.has(index) ? updater(line, index) : line)))
+  }
+
+  function handleToggleChecked(index: number) {
+    setCheckedLineIndexes((previous) => {
+      if (previous.includes(index)) {
+        return previous.filter((item) => item !== index)
+      }
+
+      return [...previous, index].sort((a, b) => a - b)
+    })
+  }
+
   function handleStamp() {
     if (!selectedLine) return
     updateSelectedLine(currentTime)
@@ -126,22 +148,25 @@ export function ManualLyricsEditor({
   }
 
   function handleShiftAll(delta: number) {
-    setDraftLines((previous) =>
-      previous.map((line) =>
-        line.startTime === null
-          ? line
-          : { ...line, startTime: roundTime(Math.max(line.startTime + delta, 0)) }
-      )
+    updateTargetLines((line) =>
+      line.startTime === null
+        ? line
+        : { ...line, startTime: roundTime(Math.max(line.startTime + delta, 0)) }
     )
     setError('')
   }
 
   function handleClear() {
-    updateSelectedLine(null)
+    updateTargetLines((line) => ({ ...line, startTime: null }))
     setError('')
   }
 
   function handleTickTime(index: number, delta: number) {
+    if (checkedLineIndexes.length && checkedLineIndexes.includes(index)) {
+      handleShiftAll(delta)
+      return
+    }
+
     setDraftLines((previous) =>
       previous.map((line, lineIndex) => {
         if (lineIndex !== index) return line
@@ -174,6 +199,7 @@ export function ManualLyricsEditor({
       return { text, startTime: preservedTime }
     }))
     setSelectedIndex(0)
+    setCheckedLineIndexes([])
     setBulkOpen(false)
     setEditMode(false)
     setError('')
@@ -326,12 +352,14 @@ export function ManualLyricsEditor({
             </button>
             <button type="button" className="ghost-pill" onClick={handleStamp}>Gán mốc dòng này</button>
             <div className="manual-lyrics-editor__toolbar-pair">
-              <button type="button" className="ghost-pill" onClick={() => handleShiftAll(-0.1)} disabled={!hasLyrics}>-0.1tt</button>
-              <button type="button" className="ghost-pill" onClick={() => handleShiftAll(0.1)} disabled={!hasLyrics}>+0.1tt</button>
+              <button type="button" className="ghost-pill" onClick={() => handleShiftAll(-0.1)} disabled={!targetLineIndexes.length}>-0.1s</button>
+              <button type="button" className="ghost-pill" onClick={() => handleShiftAll(0.1)} disabled={!targetLineIndexes.length}>+0.1s</button>
             </div>
             <div className="manual-lyrics-editor__toolbar-pair">
               <button type="button" className="ghost-pill" onClick={handleSeekSelected} disabled={selectedLine?.startTime === null}>Tới mốc</button>
-              <button type="button" className="ghost-pill" onClick={handleClear}>Xóa mốc</button>
+              <button type="button" className="ghost-pill" onClick={handleClear} disabled={!targetLineIndexes.length}>
+                {selectedTargetCount ? `Xóa ${selectedTargetCount} mốc` : 'Xóa mốc'}
+              </button>
             </div>
             <button type="button" className="ghost-pill" onClick={() => fileInputRef.current?.click()}>
               {saving ? 'Đang lưu ảnh...' : 'Đổi ảnh bìa'}
@@ -397,6 +425,7 @@ export function ManualLyricsEditor({
 
             <div className="manual-lyrics-editor__status">
               <span>Còn {missingCount} dòng chưa gán</span>
+              {selectedTargetCount ? <span>Đã chọn {selectedTargetCount} dòng</span> : null}
             </div>
 
             {error ? <p className="feedback error">{error}</p> : null}
@@ -409,8 +438,10 @@ export function ManualLyricsEditor({
                     line={line}
                     index={index}
                     isSelected={index === selectedIndex}
+                    isChecked={checkedLineIndexSet.has(index)}
                     editMode={editMode}
                     onSelect={setSelectedIndex}
+                    onToggleChecked={handleToggleChecked}
                     onTickTime={handleTickTime}
                     onUpdateText={updateLineText}
                   />

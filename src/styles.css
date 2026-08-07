@@ -1698,6 +1698,11 @@ code {
   background: rgba(255, 220, 140, 0.08);
 }
 
+.manual-lyrics-editor__row.is-checked {
+  border-color: rgba(143, 236, 197, 0.38);
+  background: rgba(143, 236, 197, 0.07);
+}
+
 .manual-lyrics-editor__row.is-complete .manual-lyrics-editor__row-time {
   color: rgba(143, 236, 197, 0.96);
 }
@@ -1719,7 +1724,16 @@ code {
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.manual-lyrics-editor__row-check {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #8fecc5;
+  cursor: pointer;
   flex: 0 0 auto;
 }
 
