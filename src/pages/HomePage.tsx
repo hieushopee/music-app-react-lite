@@ -1,5 +1,5 @@
 import { startTransition, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router'
+import { useNavigate } from 'react-router-dom'
 import type { Track, Album } from '../services/musicApi'
 import { searchMusic, searchAlbums, getSearchSuggestions } from '../services/musicApi'
 import { SectionBlock } from '../components/SectionBlock'
@@ -28,8 +28,6 @@ const sectionQueries = [
   { key: 'night', title: 'Buổi tối nhẹ', subtitle: 'Nghe dài và thư giãn', queries: ['Chill acoustic vietnam', 'Lofi viet chill', 'Nhạc không lời thư giãn', 'Acoustic cover hay nhất'] },
   { key: 'motion', title: 'Tăng năng lượng', subtitle: 'Danh mục cho lúc di chuyển', queries: ['Workout music mix', 'EDM viet remix', 'Nhạc chạy bộ', 'Vinahouse 2026'] },
 ]
-
-const ALBUM_LOAD_DELAY_MS = 700
 
 function shuffle<T>(array: T[]): T[] {
   const arr = [...array]
@@ -97,7 +95,6 @@ export function HomePage() {
 
   // Debounced suggestions
   useEffect(() => {
-    let cancelled = false
     const trimmed = query.trim()
     if (!trimmed) {
       setSuggestions([])
@@ -105,12 +102,9 @@ export function HomePage() {
     }
     const timer = setTimeout(async () => {
       const results = await getSearchSuggestions(trimmed, state.apiBase)
-      if (!cancelled) setSuggestions(results)
+      setSuggestions(results)
     }, 300)
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-    }
+    return () => clearTimeout(timer)
   }, [query, state.apiBase])
 
   useEffect(() => {
@@ -123,12 +117,11 @@ export function HomePage() {
         const seen = new Set<string>()
 
         const selectedQueries = shuffle(albumQueries).slice(0, 3)
-        const results = await Promise.allSettled(
+        const results = await Promise.all(
           selectedQueries.map((q) => searchAlbums(q, state.apiBase))
         )
 
-        for (const result of results) {
-          const batch = result.status === 'fulfilled' ? result.value : []
+        for (const batch of results) {
           for (const album of batch) {
             if (!seen.has(album.albumId)) {
               seen.add(album.albumId)
@@ -149,14 +142,8 @@ export function HomePage() {
       }
     }
 
-    const timer = window.setTimeout(() => {
-      loadAlbums()
-    }, ALBUM_LOAD_DELAY_MS)
-
-    return () => {
-      cancelled = true
-      window.clearTimeout(timer)
-    }
+    loadAlbums()
+    return () => { cancelled = true }
   }, [state.apiBase])
 
   useEffect(() => {
@@ -167,7 +154,7 @@ export function HomePage() {
       setSectionsError('')
 
       try {
-        const results = await Promise.allSettled(
+        const results = await Promise.all(
           sectionQueries.map(async (section) => {
             const randomQuery = section.queries[Math.floor(Math.random() * section.queries.length)]
             const items = await searchMusic(randomQuery, state.apiBase)
@@ -176,16 +163,9 @@ export function HomePage() {
         )
 
         if (cancelled) return
-        const fulfilledResults = results
-          .filter((result): result is PromiseFulfilledResult<readonly [string, Track[]]> => result.status === 'fulfilled')
-          .map((result) => result.value)
-
-        if (!fulfilledResults.length) {
-          throw new Error('Không tải được danh mục nhạc.')
-        }
 
         startTransition(() => {
-          setSections(Object.fromEntries(fulfilledResults))
+          setSections(Object.fromEntries(results))
         })
       } catch {
         if (!cancelled) {
@@ -214,11 +194,10 @@ export function HomePage() {
       const allAlbums: Album[] = []
       const seen = new Set<string>()
       const selectedQueries = shuffle(albumQueries).slice(0, 3)
-      const results = await Promise.allSettled(
+      const results = await Promise.all(
         selectedQueries.map((q) => searchAlbums(q, state.apiBase))
       )
-      for (const result of results) {
-        const batch = result.status === 'fulfilled' ? result.value : []
+      for (const batch of results) {
         for (const album of batch) {
           if (!seen.has(album.albumId)) {
             seen.add(album.albumId)

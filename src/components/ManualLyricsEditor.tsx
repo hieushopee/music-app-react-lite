@@ -56,12 +56,11 @@ export function ManualLyricsEditor({
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkValue, setBulkValue] = useState('')
   const [editMode, setEditMode] = useState(false)
+  const [checkedRows, setCheckedRows] = useState<Set<number>>(new Set())
   const [customThumbnail, setCustomThumbnail] = useState('')
   const [resettingCover, setResettingCover] = useState(false)
   const [resettingLyrics, setResettingLyrics] = useState(false)
-  const [checkedLineIndexes, setCheckedLineIndexes] = useState<number[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const selectAllRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!open) return
@@ -70,31 +69,22 @@ export function ManualLyricsEditor({
     setBulkValue(initialLines.map((line) => line.text).join('\n'))
     setBulkOpen(false)
     setEditMode(false)
+    setCheckedRows(new Set())
     setError('')
     setSaving(false)
     setDeleting(false)
     setResettingCover(false)
     setResettingLyrics(false)
     setCustomThumbnail('')
-    setCheckedLineIndexes([])
   }, [open, initialLines, track?.id])
 
   const selectedLine = draftLines[selectedIndex] || null
-  const checkedLineIndexSet = useMemo(() => new Set(checkedLineIndexes), [checkedLineIndexes])
-  const targetLineIndexes = checkedLineIndexes.length ? checkedLineIndexes : selectedLine ? [selectedIndex] : []
   const missingCount = useMemo(() => draftLines.filter((line) => line.startTime === null).length, [draftLines])
   const hasLyrics = draftLines.length > 0
+  const checkedCount = checkedRows.size
+  const allChecked = hasLyrics && checkedRows.size === draftLines.length
   const allStamped = hasLyrics && draftLines.every((line) => line.startTime !== null)
-  const allLinesChecked = hasLyrics && checkedLineIndexes.length === draftLines.length
-  const partiallyChecked = checkedLineIndexes.length > 0 && !allLinesChecked
-  const selectedTargetCount = checkedLineIndexes.length
   const saveLabel = allStamped ? 'Lưu lời chạy' : 'Lưu lyrics'
-
-  useEffect(() => {
-    if (selectAllRef.current) {
-      selectAllRef.current.indeterminate = partiallyChecked
-    }
-  }, [partiallyChecked])
 
   if (!open || !track) return null
 
@@ -105,16 +95,24 @@ export function ManualLyricsEditor({
       throw new Error('Không có dòng lyric nào để lưu.')
     }
 
-    const lines = allStamped
-      ? draftLines.map((line) => ({
-        text: String(line.text || '').trim(),
-        startTime: roundTime(line.startTime || 0),
-      }))
-      : []
+    const lines = draftLines
+      .map((line) => {
+        const text = String(line.text || '').trim()
+        if (line.startTime === null || !text) return null
 
-    if (lines.length) {
-      for (let index = 1; index < lines.length; index += 1) {
-        if (lines[index].startTime < lines[index - 1].startTime) {
+        return {
+          text,
+          startTime: roundTime(line.startTime || 0),
+        }
+      })
+      .filter((line): line is SyncedLyricLine => Boolean(line))
+
+    const stampedInLyricOrder = draftLines
+      .map((line) => line.startTime)
+      .filter((startTime): startTime is number => startTime !== null)
+    if (stampedInLyricOrder.length) {
+      for (let index = 1; index < stampedInLyricOrder.length; index += 1) {
+        if (stampedInLyricOrder[index] < stampedInLyricOrder[index - 1]) {
           throw new Error('Mốc thời gian phải tăng dần từ trên xuống dưới.')
         }
       }
@@ -129,28 +127,16 @@ export function ManualLyricsEditor({
     )
   }
 
-  function updateTargetLines(updater: (line: DraftLyricLine, index: number) => DraftLyricLine) {
-    const targets = new Set(targetLineIndexes)
-    if (!targets.size) return
+  function getTargetIndices({ fallbackToAll = false } = {}) {
+    const checked = [...checkedRows].filter((index) => index >= 0 && index < draftLines.length)
+    if (checked.length) return checked
+    if (fallbackToAll) return draftLines.map((_, index) => index)
+    return selectedLine ? [selectedIndex] : []
+  }
 
+  function updateLinesAt(indices: number[], updater: (line: DraftLyricLine, index: number) => DraftLyricLine) {
+    const targets = new Set(indices)
     setDraftLines((previous) => previous.map((line, index) => (targets.has(index) ? updater(line, index) : line)))
-  }
-
-  function handleToggleChecked(index: number) {
-    setCheckedLineIndexes((previous) => {
-      if (previous.includes(index)) {
-        return previous.filter((item) => item !== index)
-      }
-
-      return [...previous, index].sort((a, b) => a - b)
-    })
-  }
-
-  function handleToggleAllChecked() {
-    setCheckedLineIndexes((previous) => {
-      if (previous.length === draftLines.length) return []
-      return draftLines.map((_, index) => index)
-    })
   }
 
   function handleStamp() {
@@ -164,7 +150,8 @@ export function ManualLyricsEditor({
   }
 
   function handleShiftAll(delta: number) {
-    updateTargetLines((line) =>
+    const targets = getTargetIndices({ fallbackToAll: true })
+    updateLinesAt(targets, (line) =>
       line.startTime === null
         ? line
         : { ...line, startTime: roundTime(Math.max(line.startTime + delta, 0)) }
@@ -173,16 +160,11 @@ export function ManualLyricsEditor({
   }
 
   function handleClear() {
-    updateTargetLines((line) => ({ ...line, startTime: null }))
+    updateLinesAt(getTargetIndices(), (line) => ({ ...line, startTime: null }))
     setError('')
   }
 
   function handleTickTime(index: number, delta: number) {
-    if (checkedLineIndexes.length && checkedLineIndexes.includes(index)) {
-      handleShiftAll(delta)
-      return
-    }
-
     setDraftLines((previous) =>
       previous.map((line, lineIndex) => {
         if (lineIndex !== index) return line
@@ -193,8 +175,42 @@ export function ManualLyricsEditor({
     setError('')
   }
 
+  function handleSetLineTime(index: number, value: number | null) {
+    setDraftLines((previous) =>
+      previous.map((line, lineIndex) => (lineIndex === index ? { ...line, startTime: value === null ? null : roundTime(value) } : line))
+    )
+    setError('')
+  }
+
   function updateLineText(index: number, text: string) {
     setDraftLines((previous) => previous.map((line, lineIndex) => (lineIndex === index ? { ...line, text } : line)))
+  }
+
+  function toggleCheckedRow(index: number) {
+    setCheckedRows((previous) => {
+      const next = new Set(previous)
+      if (next.has(index)) {
+        next.delete(index)
+      } else {
+        next.add(index)
+      }
+      return next
+    })
+  }
+
+  function toggleAllRows() {
+    setCheckedRows((previous) => previous.size === draftLines.length ? new Set() : new Set(draftLines.map((_, index) => index)))
+  }
+
+  function handleDeleteLyricsRows() {
+    const targets = getTargetIndices()
+    if (!targets.length) return
+
+    const targetSet = new Set(targets)
+    setDraftLines((previous) => previous.filter((_, index) => !targetSet.has(index)))
+    setCheckedRows(new Set())
+    setSelectedIndex((previous) => Math.max(0, Math.min(previous, draftLines.length - targets.length - 1)))
+    setError('')
   }
 
   function handleApplyBulkLyrics() {
@@ -215,7 +231,7 @@ export function ManualLyricsEditor({
       return { text, startTime: preservedTime }
     }))
     setSelectedIndex(0)
-    setCheckedLineIndexes([])
+    setCheckedRows(new Set())
     setBulkOpen(false)
     setEditMode(false)
     setError('')
@@ -235,26 +251,21 @@ export function ManualLyricsEditor({
   }
 
   function handleFileSelect(event: React.ChangeEvent<HTMLInputElement>) {
-    const input = event.currentTarget
-    const file = input.files?.[0]
+    const file = event.target.files?.[0]
     if (!file) return
 
     if (!file.type.startsWith('image/')) {
       setError('Vui lòng chọn tệp hình ảnh.')
-      input.value = ''
+      event.target.value = ''
       return
     }
 
     const reader = new FileReader()
     reader.onload = async (e) => {
       const img = new Image()
-      img.onerror = () => {
-        setError('Không đọc được ảnh bìa. Hãy thử một file ảnh khác.')
-        input.value = ''
-      }
       img.onload = async () => {
         const canvas = document.createElement('canvas')
-        const maxDim = 900
+        const maxDim = 1080
         let width = img.width
         let height = img.height
 
@@ -267,10 +278,7 @@ export function ManualLyricsEditor({
         canvas.width = width
         canvas.height = height
         canvas.getContext('2d')?.drawImage(img, 0, 0, width, height)
-        const webp = canvas.toDataURL('image/webp', 0.82)
-        const compressed = webp.startsWith('data:image/webp')
-          ? webp
-          : canvas.toDataURL('image/jpeg', 0.84)
+        const compressed = canvas.toDataURL('image/jpeg', 0.95)
 
         setSaving(true)
         setError('')
@@ -282,14 +290,10 @@ export function ManualLyricsEditor({
           setError(reason instanceof Error ? reason.message : 'Không lưu được ảnh bìa.')
         } finally {
           setSaving(false)
-          input.value = ''
+          event.target.value = ''
         }
       }
       img.src = e.target?.result as string
-    }
-    reader.onerror = () => {
-      setError('Không đọc được tệp ảnh bìa.')
-      input.value = ''
     }
     reader.readAsDataURL(file)
   }
@@ -377,15 +381,16 @@ export function ManualLyricsEditor({
             </button>
             <button type="button" className="ghost-pill" onClick={handleStamp}>Gán mốc dòng này</button>
             <div className="manual-lyrics-editor__toolbar-pair">
-              <button type="button" className="ghost-pill" onClick={() => handleShiftAll(-0.1)} disabled={!targetLineIndexes.length}>-0.1s</button>
-              <button type="button" className="ghost-pill" onClick={() => handleShiftAll(0.1)} disabled={!targetLineIndexes.length}>+0.1s</button>
+              <button type="button" className="ghost-pill" onClick={() => handleShiftAll(-0.1)} disabled={!hasLyrics}>-0.1tt</button>
+              <button type="button" className="ghost-pill" onClick={() => handleShiftAll(0.1)} disabled={!hasLyrics}>+0.1tt</button>
             </div>
             <div className="manual-lyrics-editor__toolbar-pair">
               <button type="button" className="ghost-pill" onClick={handleSeekSelected} disabled={selectedLine?.startTime === null}>Tới mốc</button>
-              <button type="button" className="ghost-pill" onClick={handleClear} disabled={!targetLineIndexes.length}>
-                {selectedTargetCount ? `Xóa ${selectedTargetCount} mốc` : 'Xóa mốc'}
-              </button>
+              <button type="button" className="ghost-pill" onClick={handleClear}>Xóa mốc</button>
             </div>
+            <button type="button" className="ghost-pill" onClick={handleDeleteLyricsRows} disabled={!hasLyrics}>
+              Xóa lyrics
+            </button>
             <button type="button" className="ghost-pill" onClick={() => fileInputRef.current?.click()}>
               {saving ? 'Đang lưu ảnh...' : 'Đổi ảnh bìa'}
             </button>
@@ -451,14 +456,8 @@ export function ManualLyricsEditor({
             <div className="manual-lyrics-editor__status">
               <span>Còn {missingCount} dòng chưa gán</span>
               <label className="manual-lyrics-editor__select-all">
-                <input
-                  ref={selectAllRef}
-                  type="checkbox"
-                  checked={allLinesChecked}
-                  onChange={handleToggleAllChecked}
-                  disabled={!hasLyrics}
-                />
-                <span>Chọn tất cả</span>
+                <input type="checkbox" checked={allChecked} onChange={toggleAllRows} disabled={!hasLyrics} />
+                {checkedCount ? `Đã chọn ${checkedCount} dòng` : 'Chọn tất cả'}
               </label>
             </div>
 
@@ -472,11 +471,12 @@ export function ManualLyricsEditor({
                     line={line}
                     index={index}
                     isSelected={index === selectedIndex}
-                    isChecked={checkedLineIndexSet.has(index)}
+                    isChecked={checkedRows.has(index)}
                     editMode={editMode}
                     onSelect={setSelectedIndex}
-                    onToggleChecked={handleToggleChecked}
+                    onToggleChecked={toggleCheckedRow}
                     onTickTime={handleTickTime}
+                    onSetTime={handleSetLineTime}
                     onUpdateText={updateLineText}
                   />
                 ))

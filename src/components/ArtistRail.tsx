@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router'
+import { useEffect, useMemo, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { fetchArtistProfile, searchMusic, type ArtistProfile } from '../services/musicApi'
 import { usePlayer, getCurrentTrack } from '../store/player'
 
@@ -28,71 +28,6 @@ const ARTIST_SHORTCUTS = [
   'Ariana Grande',
   'Taylor Swift',
   'The Weeknd',
-  'Bruno Mars',
-  'Billie Eilish',
-  'Dua Lipa',
-  'Ed Sheeran',
-  'Justin Bieber',
-  'Adele',
-  'Lana Del Rey',
-  'Olivia Rodrigo',
-  'Sabrina Carpenter',
-  'Post Malone',
-  'Coldplay',
-  'Maroon 5',
-  'Imagine Dragons',
-  'OneRepublic',
-  'Blackpink',
-  'BTS',
-  'NewJeans',
-  'IVE',
-  'LE SSERAFIM',
-  'Jungkook',
-  'IU',
-  'Taeyeon',
-  'BigBang',
-  '2NE1',
-  'Hòa Minzy',
-  'Văn Mai Hương',
-  'Orange',
-  'MCK',
-  'Low G',
-  'RPT MCK',
-  'Binz',
-  'JustaTee',
-  'Rhymastic',
-  'Andree Right Hand',
-  'Suboi',
-  'Miu Lê',
-  'Chi Pu',
-  'Trúc Nhân',
-  'Đức Phúc',
-  'Jack J97',
-  'Quân A.P',
-  'RHYDER',
-  'Dương Domic',
-  'Tage',
-  'Obito',
-  'Wxrdie',
-  'T.R.I',
-  'Madihu',
-  'GREY D',
-  'Tăng Phúc',
-  'Pháo',
-  'Lê Bảo Bình',
-  'Khắc Việt',
-  'Ưng Hoàng Phúc',
-  'Phương Mỹ Chi',
-  'Vũ Cát Tường',
-  'Lynk Lee',
-  'B Ray',
-  'Masew',
-  'K-ICM',
-  'Hoaprox',
-  'Alan Walker',
-  'Avicii',
-  'Martin Garrix',
-  'Calvin Harris',
 ]
 
 const BLOCKED_ARTIST_TERMS = [
@@ -120,10 +55,6 @@ const BLOCKED_ARTIST_TERMS = [
 ]
 
 const SHORT_ARTIST_ALLOWLIST = new Set(['vu'])
-const ARTIST_BATCH_SIZE = 20
-const ARTIST_LOAD_DELAY_MS = 900
-const ARTIST_SCROLL_LOAD_OFFSET = 220
-const artistProfileCache = new Map<string, Promise<ArtistProfile | null>>()
 
 export function ArtistRail() {
   const navigate = useNavigate()
@@ -131,11 +62,7 @@ export function ArtistRail() {
   const state = usePlayer()
   const { actions } = state
   const currentTrack = getCurrentTrack(state)
-  const listRef = useRef<HTMLDivElement>(null)
-  const loadedQueryKeysRef = useRef(new Set<string>())
   const [artists, setArtists] = useState<ArtistProfile[]>([])
-  const [visibleQueryCount, setVisibleQueryCount] = useState(ARTIST_BATCH_SIZE)
-  const [loadingProfiles, setLoadingProfiles] = useState(false)
   const [loadingArtist, setLoadingArtist] = useState('')
   const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({})
   const [tooltip, setTooltip] = useState<{ name: string; y: number } | null>(null)
@@ -161,69 +88,37 @@ export function ArtistRail() {
   }, [currentTrack?.artist, state.history, state.favorites, state.queue, state.lastResults])
 
   useEffect(() => {
-    loadedQueryKeysRef.current = new Set()
-    setArtists([])
-    setBrokenImages({})
-    setVisibleQueryCount(ARTIST_BATCH_SIZE)
-  }, [artistQueries, state.apiBase])
-
-  const loadNextArtistBatch = useCallback(() => {
-    setVisibleQueryCount((previous) => Math.min(previous + ARTIST_BATCH_SIZE, artistQueries.length))
-  }, [artistQueries.length])
-
-  useEffect(() => {
     let cancelled = false
 
     async function loadArtists() {
-      const queries = artistQueries.slice(0, visibleQueryCount).filter((query) => {
-        const key = normalizeArtistName(query)
-        if (!key || loadedQueryKeysRef.current.has(key)) return false
-        loadedQueryKeysRef.current.add(key)
-        return true
-      })
+      const profiles = await Promise.allSettled(
+        artistQueries.slice(0, 40).map(async (query) => {
+          try {
+            return await fetchArtistProfile(query, state.apiBase)
+          } catch {
+            return null
+          }
+        })
+      )
 
-      if (!queries.length) return
+      if (cancelled) return
 
-      setLoadingProfiles(true)
-
-      try {
-        const profiles = await Promise.allSettled(
-          queries.map(async (query) => {
-            try {
-              return await fetchCachedArtistProfile(query, state.apiBase)
-            } catch {
-              return null
-            }
-          })
+      setArtists(
+        dedupeArtistProfiles(
+          profiles
+            .map((result) => (result.status === 'fulfilled' ? result.value : null))
+            .filter((artist): artist is ArtistProfile => Boolean(artist))
+            .filter((artist) => isLikelyArtistName(artist.name) && Boolean(artist.thumbnail))
         )
-
-        if (cancelled) return
-
-        setArtists((previous) =>
-          dedupeArtistProfiles([
-            ...previous,
-            ...profiles
-              .map((result) => (result.status === 'fulfilled' ? result.value : null))
-              .filter((artist): artist is ArtistProfile => Boolean(artist))
-              .filter((artist) => isLikelyArtistName(artist.name) && Boolean(artist.thumbnail)),
-          ])
-        )
-      } finally {
-        if (!cancelled) {
-          setLoadingProfiles(false)
-        }
-      }
+      )
     }
 
-    const timer = window.setTimeout(() => {
-      loadArtists()
-    }, ARTIST_LOAD_DELAY_MS)
+    loadArtists()
 
     return () => {
       cancelled = true
-      window.clearTimeout(timer)
     }
-  }, [artistQueries, state.apiBase, visibleQueryCount])
+  }, [artistQueries, state.apiBase])
 
   const activeQuery = useMemo(() => normalizeArtistName(state.lastQuery), [state.lastQuery])
   const currentArtistKeys = useMemo(
@@ -234,16 +129,6 @@ export function ArtistRail() {
     () => artists.filter((artist) => artist.thumbnail && !brokenImages[artist.id]),
     [artists, brokenImages]
   )
-  const hasMoreArtists = visibleQueryCount < artistQueries.length
-
-  function handleListScroll(event: React.UIEvent<HTMLDivElement>) {
-    const element = event.currentTarget
-    const remaining = element.scrollHeight - element.scrollTop - element.clientHeight
-
-    if (remaining <= ARTIST_SCROLL_LOAD_OFFSET && hasMoreArtists && !loadingProfiles) {
-      loadNextArtistBatch()
-    }
-  }
 
   async function handleArtistSelect(artist: ArtistProfile) {
     setLoadingArtist(artist.query)
@@ -264,7 +149,7 @@ export function ArtistRail() {
 
   return (
     <aside className="artist-rail" aria-label="Danh sách ca sĩ">
-      <div ref={listRef} className="artist-rail__list" onScroll={handleListScroll}>
+      <div className="artist-rail__list">
         {visibleArtists.map((artist) => {
           const artistKey = normalizeArtistName(artist.name)
           const isCurrent = currentArtistKeys.some((key) => key === artistKey || key.includes(artistKey) || artistKey.includes(key))
@@ -303,7 +188,6 @@ export function ArtistRail() {
             </button>
           )
         })}
-        {loadingProfiles ? <div className="artist-rail__loader" aria-hidden="true" /> : null}
       </div>
 
       {tooltip ? (
@@ -342,26 +226,6 @@ function dedupeArtistProfiles(list: ArtistProfile[]) {
 
     return true
   })
-}
-
-function getArtistCacheKey(query: string, apiBase: string) {
-  return `${apiBase || '/api'}:${normalizeArtistName(query)}`
-}
-
-function fetchCachedArtistProfile(query: string, apiBase: string) {
-  const cacheKey = getArtistCacheKey(query, apiBase)
-  const cached = artistProfileCache.get(cacheKey)
-  if (cached) return cached
-
-  const request = fetchArtistProfile(query, apiBase).catch(() => null)
-  artistProfileCache.set(cacheKey, request)
-
-  if (artistProfileCache.size > 160) {
-    const firstKey = artistProfileCache.keys().next().value
-    if (firstKey) artistProfileCache.delete(firstKey)
-  }
-
-  return request
 }
 
 function collectArtistQueries(values: Array<string | null | undefined>) {

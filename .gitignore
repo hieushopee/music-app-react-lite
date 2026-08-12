@@ -11,15 +11,6 @@ node_modules
 dist
 dist-ssr
 *.local
-*.bak
-
-# Runtime/download artifacts
-tmp/
-server/*.exe
-server/*-player-script.js
-server/data/manual-lyrics.json
-server/data/dl_*
-server/data/temp_*
 
 # Editor directories and files
 .vscode/*

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getAdminToken, getConfiguredApiBase, normalizeApiBase, setAdminToken, testApiBase } from '../services/musicApi'
+import { getConfiguredApiBase, normalizeApiBase, testApiBase } from '../services/musicApi'
 import { usePlayer, getCurrentTrack } from '../store/player'
 
 export function SettingsPage() {
@@ -7,11 +7,9 @@ export function SettingsPage() {
   const { actions } = state
   const currentTrack = getCurrentTrack(state)
   const [draftBase, setDraftBase] = useState(state.apiBase)
-  const [apiStatus, setApiStatus] = useState('')
-  const [apiStatusType, setApiStatusType] = useState<'idle' | 'ok' | 'error'>('idle')
-  const [adminStatus, setAdminStatus] = useState('')
+  const [status, setStatus] = useState('')
+  const [statusType, setStatusType] = useState<'idle' | 'ok' | 'error'>('idle')
   const [checking, setChecking] = useState(false)
-  const [adminTokenDraft, setAdminTokenDraft] = useState(() => getAdminToken())
 
   useEffect(() => {
     setDraftBase(state.apiBase)
@@ -23,23 +21,21 @@ export function SettingsPage() {
 
   async function handleTest() {
     setChecking(true)
-    setApiStatus('')
-    setApiStatusType('idle')
+    setStatus('')
+    setStatusType('idle')
 
     try {
       const normalized = normalizeApiBase(draftBase)
       const result = await testApiBase(normalized)
       actions.setApiBase(normalized)
       setDraftBase(normalized)
-      setApiStatusType('ok')
-      const storageLabel = result?.storage === 'postgres' ? 'Postgres' : 'JSON local'
-      const adminLabel = result?.adminProtected ? 'đã khóa chỉnh sửa' : 'chưa khóa chỉnh sửa'
-      setApiStatus(
-        `Kết nối thành công: ${result?.source || 'ytmusic'} · lưu bằng ${storageLabel} · ${adminLabel} · test search OK (${result?.sampleCount || 0} kết quả mẫu) · đang dùng ${normalized || '/api'}`
+      setStatusType('ok')
+      setStatus(
+        `Kết nối thành công: ${result?.source || 'ytmusic'} · test search OK (${result?.sampleCount || 0} kết quả mẫu) · đang dùng ${normalized || '/api'}`
       )
     } catch (error) {
-      setApiStatusType('error')
-      setApiStatus(
+      setStatusType('error')
+      setStatus(
         error instanceof Error
           ? `Kết nối thất bại hoặc server không tìm nhạc được: ${error.message}`
           : 'Không kiểm tra được kết nối.'
@@ -53,20 +49,15 @@ export function SettingsPage() {
     const normalized = normalizeApiBase(draftBase)
     actions.setApiBase(normalized)
     setDraftBase(normalized)
-    setApiStatusType('ok')
-    setApiStatus(`Đã lưu địa chỉ API: ${normalized || '/api'}`)
+    setStatusType('ok')
+    setStatus(`Đã lưu địa chỉ API: ${normalized || '/api'}`)
   }
 
   function handleClear() {
     actions.setApiBase('')
     setDraftBase('')
-    setApiStatusType('ok')
-    setApiStatus('Đã xóa địa chỉ ghi đè. App sẽ dùng proxy mặc định hoặc biến môi trường.')
-  }
-
-  function handleSaveAdminToken() {
-    setAdminToken(adminTokenDraft)
-    setAdminStatus(adminTokenDraft.trim() ? 'Đã lưu mã quản trị trên trình duyệt này.' : 'Đã xóa mã quản trị khỏi trình duyệt này.')
+    setStatusType('ok')
+    setStatus('Đã xóa địa chỉ ghi đè. App sẽ dùng proxy mặc định hoặc biến môi trường.')
   }
 
   return (
@@ -107,47 +98,7 @@ export function SettingsPage() {
           </button>
         </div>
 
-        {apiStatus ? <p className={`feedback ${apiStatusType === 'error' ? 'error' : 'ok'}`}>{apiStatus}</p> : null}
-      </section>
-
-      <section className="settings-card settings-card--wide">
-        <span>Bảo vệ chỉnh sửa</span>
-        <h2>Mã quản trị lyrics</h2>
-        <p>
-          Nếu server Render có biến <code>ADMIN_TOKEN</code>, nhập cùng mã ở đây để lưu, xóa lyrics hoặc đổi ảnh bìa.
-        </p>
-
-        <label className="settings-label" htmlFor="admin-token">
-          Mã quản trị
-        </label>
-        <input
-          id="admin-token"
-          className="settings-input"
-          type="password"
-          value={adminTokenDraft}
-          onChange={(event) => setAdminTokenDraft(event.target.value)}
-          placeholder="Nhập ADMIN_TOKEN"
-          autoComplete="off"
-        />
-
-        <div className="settings-actions">
-          <button type="button" className="action-pill" onClick={handleSaveAdminToken}>
-            Lưu mã
-          </button>
-          <button
-            type="button"
-            className="ghost-pill"
-            onClick={() => {
-              setAdminTokenDraft('')
-              setAdminToken('')
-              setAdminStatus('Đã xóa mã quản trị khỏi trình duyệt này.')
-            }}
-          >
-            Xóa mã
-          </button>
-        </div>
-
-        {adminStatus ? <p className="feedback ok">{adminStatus}</p> : null}
+        {status ? <p className={`feedback ${statusType === 'error' ? 'error' : 'ok'}`}>{status}</p> : null}
       </section>
 
       <section className="settings-grid">

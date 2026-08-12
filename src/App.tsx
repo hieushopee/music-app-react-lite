@@ -1,4 +1,4 @@
-import { Route, Routes } from 'react-router'
+import { Route, Routes } from 'react-router-dom'
 import { AppShell } from './components/AppShell'
 import { ArtistRail } from './components/ArtistRail'
 import { HiddenYouTubePlayer } from './components/HiddenYouTubePlayer'

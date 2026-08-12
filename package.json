@@ -3,9 +3,6 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "engines": {
-    "node": ">=20.19"
-  },
   "scripts": {
     "dev": "concurrently -n web,api -c cyan,green \"npm:dev:web:wait\" \"npm:dev:server\"",
     "dev:web": "vite",
@@ -18,7 +15,7 @@
   "dependencies": {
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "react-router": "^8.3.0",
+    "react-router-dom": "^7.9.0",
     "zustand": "^5.0.14"
   },
   "devDependencies": {

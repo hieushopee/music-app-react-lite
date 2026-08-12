@@ -3,8 +3,6 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import YTMusic from 'ytmusic-api'
 import lrclibApi from 'lrclib-api'
-import pg from 'pg'
-import crypto from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,57 +15,9 @@ const serverDir = path.dirname(fileURLToPath(import.meta.url))
 const dataDir = path.join(serverDir, 'data')
 const manualLyricsPath = path.join(dataDir, 'manual-lyrics.json')
 const frontendDist = path.join(serverDir, '..', 'dist')
-const databaseUrl = String(process.env.DATABASE_URL || '').trim()
-const jsonBodyLimit = process.env.JSON_BODY_LIMIT || '6mb'
-const maxCoverBytes = Number(process.env.MAX_COVER_BYTES || 2 * 1024 * 1024)
-const lyricCacheTtlMs = Number(process.env.LYRIC_CACHE_TTL_DAYS || 60) * 24 * 60 * 60 * 1000
-const lyricNegativeCacheTtlMs = Number(process.env.LYRIC_NEGATIVE_CACHE_TTL_DAYS || 2) * 24 * 60 * 60 * 1000
-const adminToken = String(process.env.ADMIN_TOKEN || '').trim()
-const requiresAdminToken = Boolean(adminToken) || process.env.REQUIRE_ADMIN_TOKEN === 'true' || process.env.NODE_ENV === 'production'
-const allowedOrigins = buildAllowedOrigins()
-const apiRateLimitMax = Number(process.env.API_RATE_LIMIT_PER_MINUTE || 240)
-const writeRateLimitMax = Number(process.env.WRITE_RATE_LIMIT_PER_MINUTE || 30)
-const maxRemoteLyricJobStatus = Number(process.env.MAX_REMOTE_LYRIC_JOB_STATUS || 300)
-const maxLocalLyricCacheEntries = Number(process.env.MAX_LOCAL_LYRIC_CACHE_ENTRIES || 200)
-const serverResponseCacheTtlMs = Number(process.env.SERVER_RESPONSE_CACHE_TTL_MINUTES || 30) * 60 * 1000
-const maxServerResponseCacheEntries = Number(process.env.MAX_SERVER_RESPONSE_CACHE_ENTRIES || 300)
-const ytMusicRequestTimeoutMs = Math.max(1000, Number(process.env.YTMUSIC_REQUEST_TIMEOUT_MS || 7000) || 7000)
-const lyricCacheCleanupIntervalMs = Number(process.env.LYRIC_CACHE_CLEANUP_INTERVAL_HOURS || 12) * 60 * 60 * 1000
-const shouldImportLegacyManualLyrics = process.env.IMPORT_LEGACY_MANUAL_LYRICS === 'true'
-const { Pool } = pg
-const dbPool = databaseUrl
-  ? new Pool({
-      connectionString: databaseUrl,
-      ssl: shouldUseDatabaseSsl(databaseUrl) ? { rejectUnauthorized: false } : false,
-    })
-  : null
 
-app.set('trust proxy', true)
-app.use(cors({
-  origin(origin, callback) {
-    if (!origin || !allowedOrigins.size || allowedOrigins.has(normalizeOrigin(origin))) {
-      callback(null, true)
-      return
-    }
-
-    callback(null, false)
-  },
-}))
-app.use('/api', createRateLimiter({
-  max: apiRateLimitMax,
-  windowMs: 60 * 1000,
-}))
-app.use('/api/manual-lyrics', createRateLimiter({
-  max: writeRateLimitMax,
-  windowMs: 60 * 1000,
-}))
-app.use('/api/manual-lyrics', requireAdminToken)
-app.use('/api/context-status', createRateLimiter({
-  max: writeRateLimitMax,
-  windowMs: 60 * 1000,
-}))
-app.use('/api/context-status', requireAdminToken)
-app.use(express.json({ limit: jsonBodyLimit }))
+app.use(cors())
+app.use(express.json({ limit: '1mb' }))
 app.use(express.static(frontendDist))
 
 app.use((req, res, next) => {
@@ -82,130 +32,7 @@ const { Client: LRCLibClient, parseLocalLyrics } = lrclibApi
 const lrclib = new LRCLibClient()
 let initPromise = null
 let inMemoryStore = null
-let dbReadyPromise = null
-let importedLegacyLyrics = false
-const remoteLyricJobs = new Map()
-const remoteLyricJobStatus = new Map()
-const localLyricCache = new Map()
-const serverResponseCache = new Map()
-
-function normalizeOrigin(value) {
-  try {
-    const url = new URL(String(value || '').trim())
-    return url.origin
-  } catch {
-    return ''
-  }
-}
-
-function buildAllowedOrigins() {
-  const rawOrigins = [
-    process.env.PUBLIC_API_BASE,
-    process.env.PUBLIC_APP_ORIGIN,
-    ...(String(process.env.ALLOWED_ORIGINS || '').split(',')),
-  ]
-
-  return new Set(rawOrigins.map(normalizeOrigin).filter(Boolean))
-}
-
-function createRateLimiter({ max, windowMs }) {
-  const hits = new Map()
-  const limit = Number.isFinite(max) && max > 0 ? max : 240
-
-  return (req, res, next) => {
-    const now = Date.now()
-    const key = `${req.ip || req.socket.remoteAddress || 'unknown'}:${req.path}`
-    const current = hits.get(key)
-
-    if (!current || current.resetAt <= now) {
-      hits.set(key, { count: 1, resetAt: now + windowMs })
-      return next()
-    }
-
-    current.count += 1
-    if (current.count > limit) {
-      res.set('Retry-After', String(Math.ceil((current.resetAt - now) / 1000)))
-      return res.status(429).json({ error: 'Quá nhiều yêu cầu. Vui lòng thử lại sau.' })
-    }
-
-    if (hits.size > 2000) {
-      for (const [hitKey, value] of hits.entries()) {
-        if (value.resetAt <= now) hits.delete(hitKey)
-      }
-    }
-
-    return next()
-  }
-}
-
-function tokensMatch(received, expected) {
-  const receivedBuffer = Buffer.from(String(received || ''))
-  const expectedBuffer = Buffer.from(String(expected || ''))
-
-  if (!receivedBuffer.length || receivedBuffer.length !== expectedBuffer.length) return false
-  return crypto.timingSafeEqual(receivedBuffer, expectedBuffer)
-}
-
-function requireAdminToken(req, res, next) {
-  if (!requiresAdminToken) {
-    return next()
-  }
-
-  if (!adminToken) {
-    return res.status(503).json({ error: 'Server production chưa cấu hình ADMIN_TOKEN nên tạm khóa thao tác chỉnh lyrics.' })
-  }
-
-  const received = req.get('x-admin-token')
-  if (!tokensMatch(received, adminToken)) {
-    return res.status(401).json({ error: 'Bạn cần nhập đúng mã quản trị trong Cài đặt để chỉnh lyrics.' })
-  }
-
-  return next()
-}
-
-function rememberLimited(map, key, value, limit) {
-  map.set(key, value)
-
-  if (map.size <= limit) return
-
-  const firstKey = map.keys().next().value
-  if (firstKey !== undefined) {
-    map.delete(firstKey)
-  }
-}
-
-function getServerResponseCache(key) {
-  const cached = serverResponseCache.get(key)
-  if (!cached) return null
-
-  if (cached.expiresAt <= Date.now()) {
-    serverResponseCache.delete(key)
-    return null
-  }
-
-  return cached.value
-}
-
-function setServerResponseCache(key, value, ttlMs = serverResponseCacheTtlMs) {
-  if (!ttlMs || ttlMs <= 0) return
-
-  rememberLimited(serverResponseCache, key, {
-    value,
-    expiresAt: Date.now() + ttlMs,
-  }, maxServerResponseCacheEntries)
-}
-
-function buildResponseCacheKey(scope, value) {
-  const input = String(value || '').trim().toLowerCase()
-  const hash = crypto.createHash('sha256').update(input).digest('hex').slice(0, 24)
-  return `${scope}:${hash}`
-}
-
-async function cleanupExpiredLyricCache() {
-  if (!dbPool) return 0
-  const result = await dbPool.query('DELETE FROM lyric_cache WHERE expires_at <= NOW()')
-  return result.rowCount || 0
-}
+let writeTimeout = null
 
 async function withTimeout(task, timeoutMs, fallbackValue) {
   let timer = null
@@ -224,144 +51,11 @@ async function withTimeout(task, timeoutMs, fallbackValue) {
   }
 }
 
-async function withRequestTimeout(task, timeoutMs = ytMusicRequestTimeoutMs) {
-  let timer = null
-
-  try {
-    return await Promise.race([
-      Promise.resolve().then(task),
-      new Promise((_, reject) => {
-        timer = setTimeout(() => {
-          const error = new Error('Upstream request timed out')
-          error.status = 504
-          reject(error)
-        }, timeoutMs)
-      }),
-    ])
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
-}
-
 async function ensureYtMusic() {
   if (!initPromise) {
     initPromise = ytmusic.initialize({ GL: 'VN', HL: 'vi' })
   }
-
-  try {
-    await initPromise
-  } catch (error) {
-    initPromise = null
-    throw error
-  }
-}
-
-function shouldUseDatabaseSsl(url) {
-  if (process.env.DATABASE_SSL === 'false') return false
-  return !/localhost|127\.0\.0\.1/i.test(url)
-}
-
-async function ensureDatabase() {
-  if (!dbPool) return false
-
-  if (!dbReadyPromise) {
-    dbReadyPromise = (async () => {
-      await dbPool.query(`
-        CREATE TABLE IF NOT EXISTS manual_track_data (
-          video_id TEXT PRIMARY KEY,
-          title TEXT NOT NULL DEFAULT '',
-          artist TEXT NOT NULL DEFAULT '',
-          album TEXT NOT NULL DEFAULT '',
-          lyrics JSONB NOT NULL DEFAULT '[]'::jsonb,
-          lines JSONB NOT NULL DEFAULT '[]'::jsonb,
-          cover_data BYTEA,
-          cover_mime TEXT,
-          cover_hash TEXT,
-          cover_url TEXT NOT NULL DEFAULT '',
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `)
-
-      await dbPool.query(`
-        CREATE TABLE IF NOT EXISTS lyric_cache (
-          cache_key TEXT PRIMARY KEY,
-          video_id TEXT NOT NULL,
-          title TEXT NOT NULL DEFAULT '',
-          artist TEXT NOT NULL DEFAULT '',
-          album TEXT NOT NULL DEFAULT '',
-          duration_seconds INTEGER NOT NULL DEFAULT 0,
-          lyrics JSONB NOT NULL DEFAULT '[]'::jsonb,
-          lines JSONB NOT NULL DEFAULT '[]'::jsonb,
-          source TEXT NOT NULL DEFAULT 'none',
-          expires_at TIMESTAMPTZ NOT NULL,
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `)
-      await dbPool.query('CREATE INDEX IF NOT EXISTS lyric_cache_video_idx ON lyric_cache (video_id)')
-      await dbPool.query('CREATE INDEX IF NOT EXISTS lyric_cache_expires_idx ON lyric_cache (expires_at)')
-      await cleanupExpiredLyricCache()
-
-      if (shouldImportLegacyManualLyrics) {
-        await importLegacyManualLyricsIntoDatabase()
-      }
-    })()
-  }
-
-  try {
-    await dbReadyPromise
-  } catch (error) {
-    dbReadyPromise = null
-    throw error
-  }
-
-  return true
-}
-
-async function importLegacyManualLyricsIntoDatabase() {
-  if (importedLegacyLyrics || !dbPool) return
-  importedLegacyLyrics = true
-
-  const legacyStore = await readManualLyricsStore()
-  const entries = Object.values(legacyStore).map(normalizeManualLyricsEntry).filter(Boolean)
-  if (!entries.length) return
-
-  let imported = 0
-
-  for (const entry of entries) {
-    let cover = { buffer: null, mime: null, hash: null, url: '' }
-    try {
-      cover = parseCoverInput(entry.thumbnail)
-    } catch (error) {
-      console.warn(`Skipped oversized legacy cover for ${entry.videoId}:`, error.message)
-    }
-
-    const result = await dbPool.query(
-      `
-        INSERT INTO manual_track_data
-          (video_id, title, artist, album, lyrics, lines, cover_data, cover_mime, cover_hash, cover_url, updated_at)
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, $10, $11)
-        ON CONFLICT (video_id) DO NOTHING
-      `,
-      [
-        entry.videoId,
-        entry.title,
-        entry.artist,
-        entry.album,
-        JSON.stringify(entry.lyrics),
-        JSON.stringify(entry.lines),
-        cover.buffer,
-        cover.mime,
-        cover.hash,
-        cover.url,
-        entry.updatedAt,
-      ]
-    )
-    imported += result.rowCount || 0
-  }
-
-  if (imported) {
-    console.log(`Imported ${imported} manual lyric entr${imported === 1 ? 'y' : 'ies'} into Postgres`)
-  }
+  return initPromise
 }
 
 async function ensureManualLyricsStore() {
@@ -397,371 +91,18 @@ async function getManualLyricsStore() {
   return inMemoryStore
 }
 
-function parseCoverInput(value) {
-  const input = String(value || '').trim()
-  if (!input) {
-    return { buffer: null, mime: null, hash: null, url: '' }
-  }
-
-  const dataUrlMatch = input.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i)
-  if (dataUrlMatch) {
-    const buffer = Buffer.from(dataUrlMatch[2], 'base64')
-    if (!buffer.length) return { buffer: null, mime: null, hash: null, url: '' }
-    if (buffer.length > maxCoverBytes) {
-      const error = new Error(`Ảnh bìa quá lớn. Tối đa ${Math.round(maxCoverBytes / 1024 / 1024)}MB sau khi nén.`)
-      error.status = 413
-      throw error
+function scheduleManualLyricsWrite() {
+  if (writeTimeout) return
+  writeTimeout = setTimeout(async () => {
+    writeTimeout = null
+    const storeToSave = inMemoryStore
+    if (!storeToSave) return
+    try {
+      await writeManualLyricsStore(storeToSave)
+    } catch (err) {
+      console.error('Failed to save manual lyrics:', err)
     }
-
-    return {
-      buffer,
-      mime: dataUrlMatch[1].toLowerCase(),
-      hash: crypto.createHash('sha256').update(buffer).digest('hex').slice(0, 24),
-      url: '',
-    }
-  }
-
-  if (/^https?:\/\//i.test(input)) {
-    return {
-      buffer: null,
-      mime: null,
-      hash: crypto.createHash('sha256').update(input).digest('hex').slice(0, 24),
-      url: input,
-    }
-  }
-
-  return { buffer: null, mime: null, hash: null, url: '' }
-}
-
-function getRequestOrigin(req) {
-  const configured = String(process.env.PUBLIC_API_BASE || '').trim().replace(/\/+$/, '')
-  if (configured) return configured
-
-  const forwardedProto = String(req.get('x-forwarded-proto') || '').split(',')[0].trim()
-  const protocol = forwardedProto || req.protocol || 'http'
-  return `${protocol}://${req.get('host')}`
-}
-
-function buildManualCoverUrl(req, videoId, version = '') {
-  const suffix = version ? `?v=${encodeURIComponent(String(version))}` : ''
-  return `${getRequestOrigin(req)}/api/manual-cover/${encodeURIComponent(videoId)}${suffix}`
-}
-
-function parseJsonArray(value) {
-  if (Array.isArray(value)) return value
-  if (typeof value !== 'string') return []
-
-  try {
-    const parsed = JSON.parse(value)
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
-}
-
-function createContextPayload({
-  lyrics = [],
-  syncedLyrics = [],
-  lyricSource = 'none',
-  canManualSync = true,
-  hasManualSync = false,
-  thumbnail = '',
-  loadingRemoteLyrics = false,
-} = {}) {
-  return {
-    lyrics: normalizeManualLyricsText(lyrics),
-    syncedLyrics: normalizeManualSyncedLyrics(syncedLyrics),
-    lyricSource,
-    canManualSync,
-    hasManualSync,
-    thumbnail: String(thumbnail || ''),
-    loadingRemoteLyrics,
-  }
-}
-
-function getLyricCacheKey(videoId) {
-  return String(videoId || '').trim()
-}
-
-function normalizeCachedLyricSource(value) {
-  return value === 'synced' || value === 'static' || value === 'none' ? value : 'none'
-}
-
-function getLyricCacheExpiresAt(source) {
-  const ttl = source === 'none' ? lyricNegativeCacheTtlMs : lyricCacheTtlMs
-  return new Date(Date.now() + Math.max(ttl, 60 * 60 * 1000))
-}
-
-function mapLyricCacheRow(row) {
-  if (!row) return null
-
-  return createContextPayload({
-    lyrics: parseJsonArray(row.lyrics),
-    syncedLyrics: parseJsonArray(row.lines),
-    lyricSource: normalizeCachedLyricSource(row.source),
-  })
-}
-
-async function getCachedRemoteLyrics(videoId) {
-  const cacheKey = getLyricCacheKey(videoId)
-  if (!cacheKey) return null
-
-  if (await ensureDatabase()) {
-    const result = await dbPool.query(
-      `
-        SELECT lyrics, lines, source
-        FROM lyric_cache
-        WHERE cache_key = $1
-          AND expires_at > NOW()
-      `,
-      [cacheKey]
-    )
-    return mapLyricCacheRow(result.rows[0])
-  }
-
-  const cached = localLyricCache.get(cacheKey)
-  if (!cached || cached.expiresAt <= Date.now()) {
-    localLyricCache.delete(cacheKey)
-    return null
-  }
-
-  return createContextPayload(cached.context)
-}
-
-async function saveRemoteLyricsCache(videoId, meta, context) {
-  const cacheKey = getLyricCacheKey(videoId)
-  if (!cacheKey) return
-
-  const payload = createContextPayload(context)
-  const source = normalizeCachedLyricSource(payload.lyricSource)
-  const expiresAt = getLyricCacheExpiresAt(source)
-
-  if (await ensureDatabase()) {
-    await dbPool.query(
-      `
-        INSERT INTO lyric_cache
-          (cache_key, video_id, title, artist, album, duration_seconds, lyrics, lines, source, expires_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, NOW())
-        ON CONFLICT (cache_key) DO UPDATE SET
-          video_id = EXCLUDED.video_id,
-          title = EXCLUDED.title,
-          artist = EXCLUDED.artist,
-          album = EXCLUDED.album,
-          duration_seconds = EXCLUDED.duration_seconds,
-          lyrics = EXCLUDED.lyrics,
-          lines = EXCLUDED.lines,
-          source = EXCLUDED.source,
-          expires_at = EXCLUDED.expires_at,
-          updated_at = NOW()
-      `,
-      [
-        cacheKey,
-        cacheKey,
-        String(meta?.title || ''),
-        String(meta?.artist || ''),
-        String(meta?.album || ''),
-        Math.round(Number(meta?.duration || 0) || 0),
-        JSON.stringify(payload.lyrics),
-        JSON.stringify(payload.syncedLyrics),
-        source,
-        expiresAt,
-      ]
-    )
-    return
-  }
-
-  rememberLimited(localLyricCache, cacheKey, {
-    expiresAt: expiresAt.getTime(),
-    context: payload,
-  }, maxLocalLyricCacheEntries)
-}
-
-function mapManualLyricsRow(row, req = null) {
-  if (!row) return null
-
-  const hasStoredCover = Boolean(row.has_cover || row.cover_data)
-  const thumbnail = hasStoredCover
-    ? req
-      ? buildManualCoverUrl(req, row.video_id, row.cover_hash || row.updated_at)
-      : '__manual_cover__'
-    : String(row.cover_url || '')
-
-  return normalizeManualLyricsEntry({
-    videoId: row.video_id,
-    title: row.title,
-    artist: row.artist,
-    album: row.album,
-    lyrics: parseJsonArray(row.lyrics),
-    lines: parseJsonArray(row.lines),
-    thumbnail,
-    updatedAt: row.updated_at,
-  })
-}
-
-async function getManualLyricsEntry(videoId, req = null) {
-  const id = String(videoId || '').trim()
-  if (!id) return null
-
-  if (await ensureDatabase()) {
-    const result = await dbPool.query(
-      `
-        SELECT
-          video_id, title, artist, album, lyrics, lines, cover_url, cover_mime, cover_hash, updated_at,
-          cover_data IS NOT NULL AS has_cover
-        FROM manual_track_data
-        WHERE video_id = $1
-      `,
-      [id]
-    )
-    return mapManualLyricsRow(result.rows[0], req)
-  }
-
-  const store = await getManualLyricsStore()
-  return normalizeManualLyricsEntry(store[id])
-}
-
-async function saveManualLyricsEntry(input, thumbnail) {
-  const entry = normalizeManualLyricsEntry(input)
-  if (!entry) return null
-
-  const cover = parseCoverInput(thumbnail)
-  const hasCoverUpdate = Boolean(cover.buffer || cover.url)
-
-  if (await ensureDatabase()) {
-    const result = await dbPool.query(
-      `
-        INSERT INTO manual_track_data
-          (video_id, title, artist, album, lyrics, lines, cover_data, cover_mime, cover_hash, cover_url, updated_at)
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, $10, NOW())
-        ON CONFLICT (video_id) DO UPDATE SET
-          title = EXCLUDED.title,
-          artist = EXCLUDED.artist,
-          album = EXCLUDED.album,
-          lyrics = EXCLUDED.lyrics,
-          lines = EXCLUDED.lines,
-          cover_data = CASE WHEN $11 THEN EXCLUDED.cover_data ELSE manual_track_data.cover_data END,
-          cover_mime = CASE WHEN $11 THEN EXCLUDED.cover_mime ELSE manual_track_data.cover_mime END,
-          cover_hash = CASE WHEN $11 THEN EXCLUDED.cover_hash ELSE manual_track_data.cover_hash END,
-          cover_url = CASE WHEN $11 THEN EXCLUDED.cover_url ELSE manual_track_data.cover_url END,
-          updated_at = NOW()
-        RETURNING
-          video_id, title, artist, album, lyrics, lines, cover_url, cover_mime, cover_hash, updated_at,
-          cover_data IS NOT NULL AS has_cover
-      `,
-      [
-        entry.videoId,
-        entry.title,
-        entry.artist,
-        entry.album,
-        JSON.stringify(entry.lyrics),
-        JSON.stringify(entry.lines),
-        cover.buffer,
-        cover.mime,
-        cover.hash,
-        cover.url,
-        hasCoverUpdate,
-      ]
-    )
-    return mapManualLyricsRow(result.rows[0])
-  }
-
-  const store = await getManualLyricsStore()
-  const previous = normalizeManualLyricsEntry(store[entry.videoId])
-  store[entry.videoId] = {
-    ...entry,
-    thumbnail: hasCoverUpdate ? thumbnail : previous?.thumbnail || entry.thumbnail || '',
-    updatedAt: new Date().toISOString(),
-  }
-  await writeManualLyricsStore(store)
-  return normalizeManualLyricsEntry(store[entry.videoId])
-}
-
-async function deleteManualLyricsEntry(videoId, mode) {
-  const id = String(videoId || '').trim()
-  if (!id) return
-
-  if (await ensureDatabase()) {
-    if (mode === 'thumbnail') {
-      await dbPool.query(
-        `
-          DELETE FROM manual_track_data
-          WHERE video_id = $1
-            AND jsonb_array_length(lyrics) = 0
-            AND jsonb_array_length(lines) = 0
-        `,
-        [id]
-      )
-      await dbPool.query(
-        `
-          UPDATE manual_track_data
-          SET cover_data = NULL, cover_mime = NULL, cover_hash = NULL, cover_url = '', updated_at = NOW()
-          WHERE video_id = $1
-        `,
-        [id]
-      )
-      return
-    }
-
-    if (mode === 'lyrics') {
-      await dbPool.query(
-        `
-          UPDATE manual_track_data
-          SET lyrics = '[]'::jsonb, lines = '[]'::jsonb, updated_at = NOW()
-          WHERE video_id = $1
-        `,
-        [id]
-      )
-      await dbPool.query(
-        `
-          DELETE FROM manual_track_data
-          WHERE video_id = $1
-            AND cover_data IS NULL
-            AND cover_url = ''
-        `,
-        [id]
-      )
-      return
-    }
-
-    await dbPool.query('DELETE FROM manual_track_data WHERE video_id = $1', [id])
-    return
-  }
-
-  const store = await getManualLyricsStore()
-  const existing = normalizeManualLyricsEntry(store[id])
-
-  if (!existing) {
-    delete store[id]
-  } else if (mode === 'thumbnail') {
-    const nextEntry = normalizeManualLyricsEntry({
-      ...existing,
-      thumbnail: '',
-      updatedAt: new Date().toISOString(),
-    })
-
-    if (nextEntry) {
-      store[id] = nextEntry
-    } else {
-      delete store[id]
-    }
-  } else if (mode === 'lyrics') {
-    const nextEntry = normalizeManualLyricsEntry({
-      ...existing,
-      lyrics: [],
-      lines: [],
-      updatedAt: new Date().toISOString(),
-    })
-
-    if (nextEntry) {
-      store[id] = nextEntry
-    } else {
-      delete store[id]
-    }
-  } else {
-    delete store[id]
-  }
-
-  await writeManualLyricsStore(store)
+  }, 2000)
 }
 
 function pickThumb(thumbnails = []) {
@@ -953,6 +294,33 @@ function mergeManualLyricsIntoSyncedLyrics(lyrics = [], syncedLyrics = []) {
   }))
 }
 
+function buildManualDraftLines(lyrics = [], syncedLyrics = []) {
+  const normalizedLyrics = normalizeManualLyricsText(lyrics)
+  const normalizedSyncedLyrics = normalizeManualSyncedLyrics(syncedLyrics)
+  const used = new Set()
+
+  return normalizedLyrics.map((text) => {
+    const matchIndex = normalizedSyncedLyrics.findIndex((line, index) => !used.has(index) && line.text === text)
+    if (matchIndex >= 0) {
+      used.add(matchIndex)
+      return {
+        text,
+        startTime: normalizedSyncedLyrics[matchIndex].startTime,
+      }
+    }
+
+    return {
+      text,
+      startTime: null,
+    }
+  })
+}
+
+function isCompleteManualSync(lyrics = [], syncedLyrics = []) {
+  const draftLines = buildManualDraftLines(lyrics, syncedLyrics)
+  return Boolean(draftLines.length && draftLines.every((line) => Number.isFinite(line.startTime)))
+}
+
 function normalizeManualLyricsEntry(entry) {
   const videoId = String(entry?.videoId || '').trim()
   if (!videoId) return null
@@ -973,6 +341,14 @@ function normalizeManualLyricsEntry(entry) {
     thumbnail,
     updatedAt: String(entry?.updatedAt || new Date().toISOString()),
   }
+}
+
+async function getManualLyricsEntry(videoId) {
+  const id = String(videoId || '').trim()
+  if (!id) return null
+
+  const store = await getManualLyricsStore()
+  return normalizeManualLyricsEntry(store[id])
 }
 
 async function getSyncedLyricsSafe(query) {
@@ -1061,89 +437,6 @@ async function fetchTimedLyrics({ title, artist, album, duration }) {
   return []
 }
 
-async function fetchRemoteTrackContext({ videoId, artistHint, titleHint, albumHint, durationHint }) {
-  await ensureYtMusic()
-
-  const [baseSong, remoteLyricsRaw] = await Promise.all([
-    withTimeout(() => ytmusic.getSong(videoId), 4500, null),
-    withTimeout(() => ytmusic.getLyrics(videoId), 4500, []),
-  ])
-
-  const artist = String(baseSong?.artist?.name || artistHint || '').trim()
-  const title = String(baseSong?.name || titleHint || '').trim()
-  const album = String(baseSong?.album?.name || albumHint || '').trim()
-  const duration = parseDuration(baseSong?.duration || durationHint)
-  const syncedLyrics = await withTimeout(
-    () =>
-      fetchTimedLyrics({
-        title,
-        artist,
-        album,
-        duration,
-      }),
-    9000,
-    []
-  )
-  const lyrics = Array.isArray(remoteLyricsRaw)
-    ? remoteLyricsRaw.filter((line) => String(line || '').trim().length > 0)
-    : []
-  const lyricSource = syncedLyrics.length ? 'synced' : lyrics.length ? 'static' : 'none'
-
-  return {
-    meta: { title, artist, album, duration },
-    context: createContextPayload({
-      lyrics,
-      syncedLyrics,
-      lyricSource,
-    }),
-  }
-}
-
-function queueRemoteLyricRefresh(params) {
-  const cacheKey = getLyricCacheKey(params.videoId)
-  if (!cacheKey || remoteLyricJobs.has(cacheKey)) return
-
-  rememberLimited(remoteLyricJobStatus, cacheKey, {
-    state: 'running',
-    startedAt: new Date().toISOString(),
-  }, maxRemoteLyricJobStatus)
-
-  const job = fetchRemoteTrackContext(params)
-    .then(async ({ meta, context }) => {
-      await saveRemoteLyricsCache(cacheKey, meta, context)
-      rememberLimited(remoteLyricJobStatus, cacheKey, {
-        state: 'done',
-        source: context.lyricSource,
-        lyrics: context.lyrics.length,
-        syncedLyrics: context.syncedLyrics.length,
-        finishedAt: new Date().toISOString(),
-      }, maxRemoteLyricJobStatus)
-    })
-    .catch((error) => {
-      const message = error instanceof Error ? error.message : String(error)
-      console.error('Remote lyric refresh failed:', message)
-      rememberLimited(remoteLyricJobStatus, cacheKey, {
-        state: 'failed',
-        error: message,
-        finishedAt: new Date().toISOString(),
-      }, maxRemoteLyricJobStatus)
-
-      return saveRemoteLyricsCache(cacheKey, {
-        title: params.titleHint,
-        artist: params.artistHint,
-        album: params.albumHint,
-        duration: params.durationHint,
-      }, createContextPayload({ lyricSource: 'none' })).catch((saveError) => {
-        console.error('Failed to save negative lyric cache:', saveError instanceof Error ? saveError.message : saveError)
-      })
-    })
-    .finally(() => {
-      remoteLyricJobs.delete(cacheKey)
-    })
-
-  remoteLyricJobs.set(cacheKey, job)
-}
-
 function dedupeById(list) {
   const seen = new Set()
   const output = []
@@ -1157,19 +450,8 @@ function dedupeById(list) {
   return output
 }
 
-app.get('/api/health', async (_req, res) => {
-  try {
-    await ensureDatabase()
-    res.json({
-      ok: true,
-      source: 'ytmusic',
-      storage: dbPool ? 'postgres' : 'json',
-      adminProtected: requiresAdminToken && Boolean(adminToken),
-      adminRequired: requiresAdminToken,
-    })
-  } catch {
-    res.status(500).json({ ok: false, source: 'ytmusic', storage: 'postgres', error: 'Database connection error' })
-  }
+app.get('/api/health', (_req, res) => {
+  res.json({ ok: true, source: 'ytmusic' })
 })
 
 app.get('/api/suggest', async (req, res) => {
@@ -1179,17 +461,11 @@ app.get('/api/suggest', async (req, res) => {
   }
 
   try {
-    const cacheKey = buildResponseCacheKey('suggest', query)
-    const cached = getServerResponseCache(cacheKey)
-    if (cached) return res.json(cached)
-
     await ensureYtMusic()
-    const suggestions = await withRequestTimeout(() => ytmusic.getSearchSuggestions(query), 4500)
-    const payload = { items: suggestions || [] }
-    setServerResponseCache(cacheKey, payload)
-    res.json(payload)
+    const suggestions = await ytmusic.getSearchSuggestions(query)
+    res.json({ items: suggestions || [] })
   } catch (error) {
-    res.status(error?.status || 500).json({ error: 'YT Music API suggest error' })
+    res.status(500).json({ error: 'YT Music API suggest error' })
   }
 })
 
@@ -1200,21 +476,13 @@ app.get('/api/search', async (req, res) => {
   }
 
   try {
-    const cacheKey = buildResponseCacheKey('search', query)
-    const cached = getServerResponseCache(cacheKey)
-    if (cached) return res.json(cached)
-
     await ensureYtMusic()
 
     const [songsResult, videosResult, mixedResult] = await Promise.allSettled([
-      withRequestTimeout(() => ytmusic.searchSongs(query)),
-      withRequestTimeout(() => ytmusic.searchVideos(query)),
-      withRequestTimeout(() => ytmusic.search(query)),
+      ytmusic.searchSongs(query),
+      ytmusic.searchVideos(query),
+      ytmusic.search(query),
     ])
-
-    if (songsResult.status === 'rejected' && videosResult.status === 'rejected' && mixedResult.status === 'rejected') {
-      throw songsResult.reason || videosResult.reason || mixedResult.reason
-    }
 
     const songs = songsResult.status === 'fulfilled' ? songsResult.value : []
     const videos = videosResult.status === 'fulfilled' ? videosResult.value : []
@@ -1228,11 +496,9 @@ app.get('/api/search', async (req, res) => {
       .slice(0, 30)
       .map(({ score, rank, ...item }) => item)
 
-    const payload = { items: ranked }
-    setServerResponseCache(cacheKey, payload)
-    res.json(payload)
-  } catch (error) {
-    res.status(error?.status || 500).json({ error: 'YT Music API error' })
+    res.json({ items: ranked })
+  } catch {
+    res.status(500).json({ error: 'YT Music API error' })
   }
 })
 
@@ -1248,157 +514,69 @@ app.get('/api/context', async (req, res) => {
   }
 
   try {
-    const manualEntry = await getManualLyricsEntry(videoId, req)
+    await ensureYtMusic()
+
+    const manualEntry = await getManualLyricsEntry(videoId)
+    const [baseSong, remoteLyricsRaw] = await Promise.all([
+      withTimeout(() => ytmusic.getSong(videoId), 6500, null),
+      withTimeout(() => ytmusic.getLyrics(videoId), 6500, []),
+    ])
+
+    const artist = String(baseSong?.artist?.name || artistHint || '').trim()
+    const title = String(baseSong?.name || titleHint || '').trim()
+    const album = String(baseSong?.album?.name || albumHint || '').trim()
+    const duration = parseDuration(baseSong?.duration || durationHint)
     const manualLyrics = manualEntry?.lyrics || []
-    const manualSyncedLyrics = manualEntry?.lines || []
-    const thumbnail = manualEntry?.thumbnail || ''
+    const manualStoredLines = manualEntry?.lines || []
+    const manualDraftLines = buildManualDraftLines(manualLyrics, manualStoredLines)
+    const manualSyncComplete = isCompleteManualSync(manualLyrics, manualStoredLines)
+    const manualSyncedLyrics = manualSyncComplete
+      ? manualDraftLines.map((line) => ({ text: line.text, startTime: line.startTime || 0 }))
+      : []
+    const fetchedSyncedLyrics = manualStoredLines.length
+      ? []
+      : await withTimeout(
+          () =>
+            fetchTimedLyrics({
+              title,
+              artist,
+              album,
+              duration,
+            }),
+          12000,
+          []
+        )
+    const mergedManualSyncedLyrics =
+      !manualSyncedLyrics.length && manualLyrics.length
+        ? mergeManualLyricsIntoSyncedLyrics(manualLyrics, fetchedSyncedLyrics)
+        : []
+    const syncedLyrics = manualSyncedLyrics.length
+      ? manualSyncedLyrics
+      : mergedManualSyncedLyrics.length
+        ? mergedManualSyncedLyrics
+        : manualLyrics.length
+          ? []
+          : fetchedSyncedLyrics
 
-    if (manualLyrics.length || manualSyncedLyrics.length) {
-      return res.json(
-        createContextPayload({
-          lyrics: manualLyrics,
-          syncedLyrics: manualSyncedLyrics,
-          lyricSource: 'manual',
-          hasManualSync: true,
-          thumbnail,
-        })
-      )
-    }
+    const remoteLyrics = Array.isArray(remoteLyricsRaw)
+      ? remoteLyricsRaw.filter((line) => String(line || '').trim().length > 0)
+      : []
+    const lyrics = manualLyrics.length ? manualLyrics : remoteLyrics
 
-    const cachedContext = await getCachedRemoteLyrics(videoId)
-    if (cachedContext) {
-      return res.json({
-        ...cachedContext,
-        thumbnail,
-      })
-    }
-
-    queueRemoteLyricRefresh({
-      videoId,
-      artistHint,
-      titleHint,
-      albumHint,
-      durationHint,
-    })
-
-    return res.json(
-      createContextPayload({
-        thumbnail,
-        loadingRemoteLyrics: true,
-      })
-    )
-  } catch {
-    res.status(500).json({ error: 'YT Music context error' })
-  }
-})
-
-app.get('/api/context-status', async (req, res) => {
-  const videoId = String(req.query.videoId || '').trim()
-  if (!videoId) {
-    return res.status(400).json({ error: 'Missing videoId parameter' })
-  }
-
-  try {
-    const manualEntry = await getManualLyricsEntry(videoId, req)
-    let cache = null
-
-    if (await ensureDatabase()) {
-      const result = await dbPool.query(
-        `
-          SELECT source, jsonb_array_length(lyrics) AS lyric_count,
-                 jsonb_array_length(lines) AS synced_count,
-                 expires_at, updated_at
-          FROM lyric_cache
-          WHERE cache_key = $1
-        `,
-        [videoId]
-      )
-      const row = result.rows[0]
-      cache = row
-        ? {
-            source: row.source,
-            lyrics: Number(row.lyric_count || 0),
-            syncedLyrics: Number(row.synced_count || 0),
-            expiresAt: row.expires_at,
-            updatedAt: row.updated_at,
-          }
-        : null
-    } else {
-      const cached = localLyricCache.get(videoId)
-      cache = cached
-        ? {
-            source: cached.context?.lyricSource || 'none',
-            lyrics: cached.context?.lyrics?.length || 0,
-            syncedLyrics: cached.context?.syncedLyrics?.length || 0,
-            expiresAt: new Date(cached.expiresAt).toISOString(),
-          }
-        : null
-    }
+    const lyricSource = manualLyrics.length || manualSyncedLyrics.length ? 'manual' : syncedLyrics.length ? 'synced' : lyrics.length ? 'static' : 'none'
+    const canManualSync = true
 
     res.json({
-      ok: true,
-      storage: dbPool ? 'postgres' : 'json',
-      videoId,
-      manual: {
-        hasLyrics: Boolean(manualEntry?.lyrics?.length || manualEntry?.lines?.length),
-        lyrics: manualEntry?.lyrics?.length || 0,
-        syncedLyrics: manualEntry?.lines?.length || 0,
-        hasThumbnail: Boolean(manualEntry?.thumbnail),
-      },
-      cache,
-      job: remoteLyricJobStatus.get(videoId) || null,
+      lyrics,
+      syncedLyrics,
+      manualLines: manualDraftLines,
+      lyricSource,
+      canManualSync,
+      hasManualSync: Boolean(manualLyrics.length || manualStoredLines.length),
+      thumbnail: manualEntry?.thumbnail || '',
     })
   } catch {
-    res.status(500).json({ error: 'Context status error' })
-  }
-})
-
-app.get('/api/manual-cover/:videoId', async (req, res) => {
-  const videoId = String(req.params.videoId || '').trim()
-  if (!videoId) {
-    return res.status(400).json({ error: 'Missing videoId parameter' })
-  }
-
-  try {
-    if (await ensureDatabase()) {
-      const result = await dbPool.query(
-        'SELECT cover_data, cover_mime, cover_hash, updated_at FROM manual_track_data WHERE video_id = $1',
-        [videoId]
-      )
-      const row = result.rows[0]
-
-      if (!row?.cover_data) {
-        return res.status(404).json({ error: 'Manual cover not found' })
-      }
-
-      const etag = row.cover_hash ? `"${row.cover_hash}"` : null
-      if (etag && req.get('if-none-match') === etag) {
-        return res.status(304).end()
-      }
-
-      if (etag) res.set('ETag', etag)
-      res.set('Content-Type', row.cover_mime || 'image/jpeg')
-      res.set('Cache-Control', 'public, max-age=31536000, immutable')
-      return res.send(row.cover_data)
-    }
-
-    const entry = await getManualLyricsEntry(videoId, req)
-    const thumbnail = String(entry?.thumbnail || '')
-    if (/^https?:\/\//i.test(thumbnail)) {
-      return res.redirect(thumbnail)
-    }
-
-    const cover = parseCoverInput(thumbnail)
-    if (!cover.buffer) {
-      return res.status(404).json({ error: 'Manual cover not found' })
-    }
-
-    if (cover.hash) res.set('ETag', `"${cover.hash}"`)
-    res.set('Content-Type', cover.mime || 'image/jpeg')
-    res.set('Cache-Control', 'public, max-age=31536000, immutable')
-    return res.send(cover.buffer)
-  } catch (error) {
-    res.status(error?.status || 500).json({ error: 'Manual cover read error' })
+    res.status(500).json({ error: 'YT Music context error' })
   }
 })
 
@@ -1420,7 +598,7 @@ app.post('/api/manual-lyrics', async (req, res) => {
   }
 
   try {
-    const entry = await saveManualLyricsEntry({
+    const entry = normalizeManualLyricsEntry({
       videoId,
       title,
       artist,
@@ -1429,15 +607,19 @@ app.post('/api/manual-lyrics', async (req, res) => {
       lines,
       thumbnail,
       updatedAt: new Date().toISOString(),
-    }, thumbnail)
+    })
 
     if (!entry) {
       return res.status(400).json({ error: 'Invalid lyric data' })
     }
 
+    const store = await getManualLyricsStore()
+    store[videoId] = entry
+    scheduleManualLyricsWrite()
+
     res.json({ item: entry })
-  } catch (error) {
-    res.status(error?.status || 500).json({ error: error?.message || 'Manual lyric save error' })
+  } catch {
+    res.status(500).json({ error: 'Manual lyric save error' })
   }
 })
 
@@ -1449,7 +631,42 @@ app.delete('/api/manual-lyrics', async (req, res) => {
   }
 
   try {
-    await deleteManualLyricsEntry(videoId, mode)
+    const store = await getManualLyricsStore()
+    const existing = normalizeManualLyricsEntry(store[videoId])
+
+    if (!existing) {
+      delete store[videoId]
+    } else if (mode === 'thumbnail') {
+      const nextEntry = normalizeManualLyricsEntry({
+        ...existing,
+        thumbnail: '',
+        updatedAt: new Date().toISOString(),
+      })
+
+      if (nextEntry) {
+        store[videoId] = nextEntry
+      } else {
+        delete store[videoId]
+      }
+    } else if (mode === 'lyrics') {
+      const nextEntry = normalizeManualLyricsEntry({
+        ...existing,
+        lyrics: [],
+        lines: [],
+        updatedAt: new Date().toISOString(),
+      })
+
+      if (nextEntry) {
+        store[videoId] = nextEntry
+      } else {
+        delete store[videoId]
+      }
+    } else {
+      delete store[videoId]
+    }
+
+    scheduleManualLyricsWrite()
+
     res.json({ success: true })
   } catch {
     res.status(500).json({ error: 'Manual lyric delete error' })
@@ -1463,13 +680,9 @@ app.get('/api/artist', async (req, res) => {
   }
 
   try {
-    const cacheKey = buildResponseCacheKey('artist', query)
-    const cached = getServerResponseCache(cacheKey)
-    if (cached) return res.json(cached)
-
     await ensureYtMusic()
 
-    const results = await withRequestTimeout(() => ytmusic.searchArtists(query), 5000)
+    const results = await ytmusic.searchArtists(query)
     const ranked = (results || [])
       .map((artist, index) => ({
         normalized: normalizeArtist(artist, query),
@@ -1480,16 +693,12 @@ app.get('/api/artist', async (req, res) => {
       .sort((a, b) => b.score - a.score || a.rank - b.rank)[0]
 
     if (!ranked || ranked.score < 120) {
-      const payload = { item: null }
-      setServerResponseCache(cacheKey, payload)
-      return res.json(payload)
+      return res.json({ item: null })
     }
 
-    const payload = { item: ranked.normalized }
-    setServerResponseCache(cacheKey, payload)
-    res.json(payload)
-  } catch (error) {
-    res.status(error?.status || 500).json({ error: 'YT Music artist error' })
+    res.json({ item: ranked.normalized })
+  } catch {
+    res.status(500).json({ error: 'YT Music artist error' })
   }
 })
 
@@ -1500,13 +709,9 @@ app.get('/api/albums', async (req, res) => {
   }
 
   try {
-    const cacheKey = buildResponseCacheKey('albums', query)
-    const cached = getServerResponseCache(cacheKey)
-    if (cached) return res.json(cached)
-
     await ensureYtMusic()
 
-    const albums = await withRequestTimeout(() => ytmusic.searchAlbums(query), 6000)
+    const albums = await ytmusic.searchAlbums(query)
     const items = (albums || []).slice(0, 20).map((album) => ({
       albumId: album.albumId || '',
       playlistId: album.playlistId || '',
@@ -1517,11 +722,9 @@ app.get('/api/albums', async (req, res) => {
       thumbnail: upscaleThumbnail(pickThumb(album.thumbnails || [])),
     })).filter(a => a.albumId)
 
-    const payload = { items }
-    setServerResponseCache(cacheKey, payload)
-    res.json(payload)
-  } catch (error) {
-    res.status(error?.status || 500).json({ error: 'YT Music albums error' })
+    res.json({ items })
+  } catch {
+    res.status(500).json({ error: 'YT Music albums error' })
   }
 })
 
@@ -1532,30 +735,24 @@ app.get('/api/album/:id', async (req, res) => {
   }
 
   try {
-    const cacheKey = buildResponseCacheKey('album', albumId)
-    const cached = getServerResponseCache(cacheKey)
-    if (cached) return res.json(cached)
-
     await ensureYtMusic()
 
-    const album = await withRequestTimeout(() => ytmusic.getAlbum(albumId), 7000)
+    const album = await ytmusic.getAlbum(albumId)
     if (!album) {
       return res.status(404).json({ error: 'Album not found' })
     }
 
     const songs = (album.songs || []).map(normalizeSong).filter(Boolean)
 
-    const payload = {
+    res.json({
       name: String(album.name || 'Unknown album'),
       artist: String(album.artist?.name || 'Unknown artist'),
       year: album.year || null,
       thumbnail: upscaleThumbnail(pickThumb(album.thumbnails || [])),
       songs,
-    }
-    setServerResponseCache(cacheKey, payload)
-    res.json(payload)
-  } catch (error) {
-    res.status(error?.status || 500).json({ error: 'YT Music album error' })
+    })
+  } catch {
+    res.status(500).json({ error: 'YT Music album error' })
   }
 })
 
@@ -1563,25 +760,11 @@ app.listen(port, '0.0.0.0', () => {
   console.log(`YT Music API listening on http://0.0.0.0:${port}`)
 })
 
-if (dbPool && lyricCacheCleanupIntervalMs > 0) {
-  const cleanupTimer = setInterval(() => {
-    cleanupExpiredLyricCache().catch((error) => {
-      console.error('Lyric cache cleanup failed:', error instanceof Error ? error.message : error)
-    })
-  }, lyricCacheCleanupIntervalMs)
-  cleanupTimer.unref?.()
-}
-
-function exitAfterFatalError() {
-  setTimeout(() => process.exit(1), 100).unref?.()
-}
-
+// Prevent unhandled errors from crashing the process
 process.on('uncaughtException', (err) => {
   console.error('[uncaughtException]', err.message)
-  exitAfterFatalError()
 })
 
 process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection]', reason instanceof Error ? reason.message : reason)
-  exitAfterFatalError()
 })

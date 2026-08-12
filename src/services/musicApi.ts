@@ -25,15 +25,14 @@ export interface ArtistProfile {
 export interface TrackContext {
   lyrics: string[]
   syncedLyrics: SyncedLyricLine[]
+  manualLines?: Array<{ text: string; startTime: number | null }>
   lyricSource: LyricSource
   canManualSync: boolean
   hasManualSync: boolean
   thumbnail?: string
-  loadingRemoteLyrics?: boolean
 }
 
 const TRACK_CONTEXT_CACHE_KEY = 'pulseframe-track-context-cache-v1'
-const ADMIN_TOKEN_KEY = 'pulseframe-admin-token'
 const TRACK_CONTEXT_CACHE_LIMIT = 40
 const DEFAULT_REQUEST_TIMEOUT_MS = 8000
 const CONTEXT_REQUEST_TIMEOUT_MS = 20000
@@ -56,53 +55,22 @@ export function getConfiguredApiBase() {
   return normalizeApiBase(import.meta.env.VITE_API_BASE)
 }
 
-export function getAdminToken() {
-  if (typeof window === 'undefined') return ''
-
-  try {
-    return String(window.localStorage.getItem(ADMIN_TOKEN_KEY) || '').trim()
-  } catch {
-    return ''
-  }
-}
-
-export function setAdminToken(value: string) {
-  if (typeof window === 'undefined') return
-
-  const token = String(value || '').trim()
-  try {
-    if (token) {
-      window.localStorage.setItem(ADMIN_TOKEN_KEY, token)
-    } else {
-      window.localStorage.removeItem(ADMIN_TOKEN_KEY)
-    }
-  } catch {
-    // Ignore storage failures.
-  }
-}
-
-function withAdminHeaders(headers: Record<string, string> = {}) {
-  const token = getAdminToken()
-  return token ? { ...headers, 'x-admin-token': token } : headers
-}
-
 function buildCandidates(baseOverride = '') {
   const configured = getConfiguredApiBase()
-  const candidates = [normalizeApiBase(baseOverride), configured, '']
+  const candidates = [normalizeApiBase(baseOverride), configured]
 
   if (typeof window !== 'undefined') {
     const { protocol, hostname, port } = window.location
 
     if (protocol === 'http:' || protocol === 'https:') {
+      candidates.push(`${protocol}//${hostname}:5174`)
       if (port === '5174') {
         candidates.push(`${protocol}//${window.location.host}`)
-      } else if (hostname === 'localhost' || hostname === '127.0.0.1') {
-        candidates.push(`${protocol}//${hostname}:5174`)
       }
     }
   }
 
-  candidates.push('http://127.0.0.1:5174', 'http://localhost:5174')
+  candidates.push('', 'http://127.0.0.1:5174', 'http://localhost:5174')
 
   const unique: string[] = []
   const seen = new Set<string>()
@@ -263,10 +231,10 @@ function createEmptyTrackContext(): TrackContext {
   return {
     lyrics: [],
     syncedLyrics: [],
+    manualLines: [],
     lyricSource: 'none',
     canManualSync: false,
     hasManualSync: false,
-    loadingRemoteLyrics: false,
   }
 }
 
@@ -276,11 +244,23 @@ function normalizeTrackContext(data: unknown): TrackContext {
   return {
     lyrics: Array.isArray(candidate?.lyrics) ? candidate.lyrics.map((line) => String(line || '').trim()).filter(Boolean) : [],
     syncedLyrics: normalizeSyncedLyrics(candidate?.syncedLyrics),
+    manualLines: Array.isArray(candidate?.manualLines)
+      ? candidate.manualLines
+          .map((line) => {
+            const text = String(line?.text || '').trim()
+            const startTime = line?.startTime === null || line?.startTime === undefined ? null : Number(line.startTime)
+            if (!text) return null
+            return {
+              text,
+              startTime: Number.isFinite(startTime) ? startTime : null,
+            }
+          })
+          .filter((line): line is { text: string; startTime: number | null } => Boolean(line))
+      : [],
     lyricSource: normalizeLyricSource(candidate?.lyricSource),
     canManualSync: Boolean(candidate?.canManualSync),
     hasManualSync: Boolean(candidate?.hasManualSync),
     thumbnail: typeof candidate?.thumbnail === 'string' ? candidate.thumbnail : '',
-    loadingRemoteLyrics: Boolean(candidate?.loadingRemoteLyrics),
   }
 }
 
@@ -293,6 +273,7 @@ function mergeTrackContexts(nextContext: TrackContext, cachedContext: TrackConte
       ...nextContext,
       lyrics: nextContext.lyrics.length ? nextContext.lyrics : cachedContext.lyrics,
       syncedLyrics: cachedContext.syncedLyrics,
+      manualLines: cachedContext.manualLines,
       lyricSource: cachedContext.lyricSource,
       canManualSync: nextContext.canManualSync || cachedContext.canManualSync,
       hasManualSync: nextContext.hasManualSync || cachedContext.hasManualSync,
@@ -303,6 +284,7 @@ function mergeTrackContexts(nextContext: TrackContext, cachedContext: TrackConte
     return {
       ...nextContext,
       lyrics: cachedContext.lyrics,
+      manualLines: cachedContext.manualLines,
       lyricSource: cachedContext.lyricSource,
       canManualSync: nextContext.canManualSync || cachedContext.canManualSync,
       hasManualSync: nextContext.hasManualSync || cachedContext.hasManualSync,
@@ -350,23 +332,16 @@ function getCachedTrackContext(videoId: string) {
   const entry = store?.[videoId]
   if (!entry?.context) return null
 
-  return {
-    ...normalizeTrackContext(entry.context),
-    loadingRemoteLyrics: false,
-  }
+  return normalizeTrackContext(entry.context)
 }
 
 function saveTrackContext(videoId: string, context: unknown) {
   const normalized = normalizeTrackContext(context)
-  const storedContext = {
-    ...normalized,
-    loadingRemoteLyrics: false,
-  }
   const store = {
     ...readTrackContextCacheStore(),
     [videoId]: {
       savedAt: Date.now(),
-      context: storedContext,
+      context: normalized,
     },
   }
 
@@ -479,9 +454,9 @@ export async function saveManualLyrics(track: Track | null, lyrics: string[], li
 
   const data = await requestViaCandidates('/api/manual-lyrics', baseOverride, {
     method: 'POST',
-    headers: withAdminHeaders({
+    headers: {
       'Content-Type': 'application/json',
-    }),
+    },
     body: JSON.stringify({
       videoId,
       title: String(track?.title || ''),
@@ -509,7 +484,6 @@ export async function deleteManualLyrics(videoId: string, baseOverride = '') {
 
   const result = await requestViaCandidates(`/api/manual-lyrics?videoId=${encodeURIComponent(id)}`, baseOverride, {
     method: 'DELETE',
-    headers: withAdminHeaders(),
   })
   invalidateTrackContextCache(id)
   return result
@@ -523,7 +497,6 @@ export async function resetManualCover(videoId: string, baseOverride = '') {
 
   const result = await requestViaCandidates(`/api/manual-lyrics?videoId=${encodeURIComponent(id)}&mode=thumbnail`, baseOverride, {
     method: 'DELETE',
-    headers: withAdminHeaders(),
   })
   invalidateTrackContextCache(id)
   return result
@@ -537,7 +510,6 @@ export async function resetManualLyrics(videoId: string, baseOverride = '') {
 
   const result = await requestViaCandidates(`/api/manual-lyrics?videoId=${encodeURIComponent(id)}&mode=lyrics`, baseOverride, {
     method: 'DELETE',
-    headers: withAdminHeaders(),
   })
   invalidateTrackContextCache(id)
   return result
@@ -584,3 +556,4 @@ export async function fetchAlbumDetail(albumId: string, baseOverride = ''): Prom
     songs: normalizeTrackList(data.songs),
   }
 }
+

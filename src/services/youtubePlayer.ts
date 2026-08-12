@@ -59,38 +59,19 @@ export function loadYouTubeApi() {
   }
 
   loadingPromise = new Promise<YouTubeNamespace>((resolve, reject) => {
-    const fail = (error: Error) => {
-      loadingPromise = null
-      reject(error)
-    }
-    const timeout = window.setTimeout(() => {
-      fail(new Error('Hết thời gian tải YouTube IFrame API.'))
-    }, 10000)
-    let script = document.querySelector<HTMLScriptElement>('script[data-yt-frame-api]')
-
-    if (script?.dataset.ytFrameApiFailed === 'true') {
-      script.remove()
-      script = null
-    }
-
-    if (!script) {
-      script = document.createElement('script')
+    const existing = document.querySelector<HTMLScriptElement>('script[data-yt-frame-api]')
+    if (!existing) {
+      const script = document.createElement('script')
       script.src = 'https://www.youtube.com/iframe_api'
       script.async = true
       script.dataset.ytFrameApi = 'true'
-      script.onerror = () => {
-        window.clearTimeout(timeout)
-        script?.remove()
-        if (script) script.dataset.ytFrameApiFailed = 'true'
-        fail(new Error('Không tải được YouTube IFrame API.'))
-      }
+      script.onerror = () => reject(new Error('Không tải được YouTube IFrame API.'))
       document.body.appendChild(script)
     }
 
     window.onYouTubeIframeAPIReady = () => {
-      window.clearTimeout(timeout)
-      if (!window.YT?.Player) {
-        fail(new Error('YouTube API chưa sẵn sàng.'))
+      if (!window.YT) {
+        reject(new Error('YouTube API chưa sẵn sàng.'))
         return
       }
 

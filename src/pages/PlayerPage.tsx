@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router'
+import { Link } from 'react-router-dom'
 import { LyricsView } from '../components/LyricsView'
 import { ManualLyricsEditor } from '../components/ManualLyricsEditor'
 import { getCoverStyle } from '../lib/cover'
@@ -21,14 +21,13 @@ export function PlayerPage() {
   const effectiveDuration = getEffectiveDuration(state)
   const [lyrics, setLyrics] = useState<string[]>([])
   const [syncedLyrics, setSyncedLyrics] = useState<SyncedLyricLine[]>([])
+  const [manualLines, setManualLines] = useState<Array<{ text: string; startTime: number | null }>>([])
   const [hasManualSync, setHasManualSync] = useState(false)
   const [manualThumbnail, setManualThumbnail] = useState('')
   const [loading, setLoading] = useState(false)
-  const [remoteLyricsLoading, setRemoteLyricsLoading] = useState(false)
   const [error, setError] = useState('')
   const [editorOpen, setEditorOpen] = useState(false)
   const [contextVersion, setContextVersion] = useState(0)
-  const [remoteLyricsPollCount, setRemoteLyricsPollCount] = useState(0)
 
   useEffect(() => {
     if (!currentTrack) return
@@ -45,10 +44,9 @@ export function PlayerPage() {
         if (cancelled) return
         setLyrics(context.lyrics)
         setSyncedLyrics(context.syncedLyrics)
+        setManualLines(context.manualLines || [])
         setHasManualSync(context.hasManualSync)
         setManualThumbnail(context.thumbnail || '')
-        const stillWaitingForRemoteLyrics = Boolean(context.loadingRemoteLyrics && remoteLyricsPollCount < 12)
-        setRemoteLyricsLoading(stillWaitingForRemoteLyrics)
         const nextThumbnail = context.thumbnail || track.sourceThumbnail || ''
         if (nextThumbnail !== track.thumbnail) {
           actions.updateTrack(track.id, { thumbnail: nextThumbnail })
@@ -57,9 +55,9 @@ export function PlayerPage() {
         if (cancelled) return
         setLyrics([])
         setSyncedLyrics([])
+        setManualLines([])
         setHasManualSync(false)
         setManualThumbnail('')
-        setRemoteLyricsLoading(false)
         setError(reason instanceof Error ? reason.message : 'Không thể tải lời nhạc.')
       } finally {
         if (!cancelled) {
@@ -73,25 +71,7 @@ export function PlayerPage() {
     return () => {
       cancelled = true
     }
-  }, [currentTrack?.id, state.apiBase, contextVersion, remoteLyricsPollCount])
-
-  useEffect(() => {
-    if (!currentTrack || !remoteLyricsLoading || remoteLyricsPollCount >= 12) return
-
-    const timer = window.setTimeout(() => {
-      setRemoteLyricsPollCount((previous) => previous + 1)
-      setContextVersion((previous) => previous + 1)
-    }, 2500)
-
-    return () => {
-      window.clearTimeout(timer)
-    }
-  }, [currentTrack?.id, remoteLyricsLoading, remoteLyricsPollCount])
-
-  useEffect(() => {
-    setRemoteLyricsPollCount(0)
-    setRemoteLyricsLoading(false)
-  }, [currentTrack?.id])
+  }, [currentTrack?.id, state.apiBase, contextVersion])
 
   useEffect(() => {
     document.body.classList.add('player-mode')
@@ -145,14 +125,6 @@ export function PlayerPage() {
     }
   }, [actions, currentTrack?.id])
 
-  const editorSeedLines = useMemo(
-    () =>
-      syncedLyrics.length
-        ? syncedLyrics.map((line) => ({ text: line.text, startTime: line.startTime }))
-        : lyrics.map((text) => ({ text, startTime: null })),
-    [syncedLyrics, lyrics]
-  )
-
   if (!currentTrack) {
     return (
       <main className="player-page player-page--empty">
@@ -170,13 +142,22 @@ export function PlayerPage() {
   const hasSyncedLyrics = syncedLyrics.length > 0
   const lines = buildLyricTimeline(syncedLyrics, lyrics, effectiveDuration || currentTrack.duration)
   const activeIndex = hasSyncedLyrics ? findActiveLyricIndex(lines, state.progress + lyricOffset) : -1
-  const lyricsLoading = loading || (remoteLyricsLoading && !lines.length)
+  const editorSeedLines = useMemo(
+    () =>
+      manualLines.length
+        ? manualLines
+        : syncedLyrics.length
+        ? syncedLyrics.map((line) => ({ text: line.text, startTime: line.startTime }))
+        : lyrics.map((text) => ({ text, startTime: null })),
+    [manualLines, syncedLyrics, lyrics]
+  )
 
   const showLyricsEditorControl = Boolean(currentTrack)
 
   async function handleSaveManual(payload: { lyrics: string[]; lines: SyncedLyricLine[]; thumbnail?: string }) {
     if (!currentTrack) return
-    await saveManualLyrics(currentTrack, payload.lyrics, payload.lines, state.apiBase, payload.thumbnail || '')
+    const nextThumbnail = payload.thumbnail === undefined ? manualThumbnail : payload.thumbnail
+    await saveManualLyrics(currentTrack, payload.lyrics, payload.lines, state.apiBase, nextThumbnail)
     if (payload.thumbnail) {
       actions.updateTrack(currentTrack.id, { thumbnail: payload.thumbnail })
     }
@@ -219,7 +200,7 @@ export function PlayerPage() {
           <LyricsView
             lines={lines}
             activeIndex={activeIndex}
-            loading={lyricsLoading}
+            loading={loading}
             error={error}
             synced={hasSyncedLyrics}
             onSeekLine={(line) => handleSeekLyricLine(line.start)}
