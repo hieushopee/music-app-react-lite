@@ -1052,12 +1052,17 @@ code {
 .settings-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
 }
 
 .song-card__actions {
   flex-wrap: nowrap;
   align-items: stretch;
+  gap: 10px;
+}
+
+.settings-actions {
+  gap: 14px;
+  margin-top: 18px;
 }
 
 .song-card__actions .action-chip {
