@@ -52,12 +52,31 @@ export function normalizeApiBase(base: string | undefined | null) {
 }
 
 export function getConfiguredApiBase() {
-  return normalizeApiBase(import.meta.env.VITE_API_BASE)
+  const configured = normalizeApiBase(import.meta.env.VITE_API_BASE)
+  return shouldIgnoreLocalApiBase(configured) ? '' : configured
+}
+
+function isLocalHost(hostname: string) {
+  const host = hostname.toLowerCase()
+  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]'
+}
+
+function isLocalApiBase(base: string) {
+  try {
+    return isLocalHost(new URL(base).hostname)
+  } catch {
+    return false
+  }
+}
+
+function shouldIgnoreLocalApiBase(base: string) {
+  return typeof window !== 'undefined' && !isLocalHost(window.location.hostname) && isLocalApiBase(base)
 }
 
 function buildCandidates(baseOverride = '') {
   const configured = getConfiguredApiBase()
-  const candidates = [normalizeApiBase(baseOverride), configured]
+  const override = normalizeApiBase(baseOverride)
+  const candidates = [shouldIgnoreLocalApiBase(override) ? '' : override, configured]
 
   if (typeof window !== 'undefined') {
     const { protocol, hostname, port } = window.location
@@ -70,7 +89,12 @@ function buildCandidates(baseOverride = '') {
     }
   }
 
-  candidates.push('', 'http://127.0.0.1:5174', 'http://localhost:5174')
+  // A public deployment serves its API from the same origin (or VITE_API_BASE).
+  // Trying localhost here makes every visitor's browser call its own machine.
+  candidates.push('')
+  if (typeof window === 'undefined' || isLocalHost(window.location.hostname)) {
+    candidates.push('http://127.0.0.1:5174', 'http://localhost:5174')
+  }
 
   const unique: string[] = []
   const seen = new Set<string>()

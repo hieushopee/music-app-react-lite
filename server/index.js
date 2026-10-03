@@ -697,8 +697,11 @@ app.get('/api/artist', async (req, res) => {
     }
 
     res.json({ item: ranked.normalized })
-  } catch {
-    res.status(500).json({ error: 'YT Music artist error' })
+  } catch (error) {
+    // Artist lookup only feeds optional avatar shortcuts. Do not turn a
+    // temporary upstream block into a client-side error storm.
+    console.error('YT Music artist error:', error instanceof Error ? error.message : error)
+    res.json({ item: null })
   }
 })
 

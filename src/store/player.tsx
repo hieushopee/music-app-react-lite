@@ -57,6 +57,8 @@ const STORAGE_KEY = 'pulseframe-player-state'
 const MAX_HISTORY = 24
 const MAX_LYRIC_OFFSET = 12
 const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2]
+const MAX_PERSISTED_TRACKS = 60
+const MAX_PERSISTED_STATE_BYTES = 1_500_000
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
@@ -80,6 +82,35 @@ function normalizeTrack(track: Track | null | undefined) {
         : typeof track.thumbnail === 'string'
           ? track.thumbnail
           : '',
+  }
+}
+
+function persistableTrack(track: Track): Track | null {
+  const normalized = normalizeTrack(track)
+  if (!normalized) return null
+
+  // A manually supplied cover can be a multi-megabyte data URL. It belongs in
+  // memory for the current session, not in the small browser storage quota.
+  return {
+    ...normalized,
+    thumbnail: normalized.thumbnail.startsWith('data:') ? '' : normalized.thumbnail,
+    sourceThumbnail: normalized.sourceThumbnail.startsWith('data:') ? '' : normalized.sourceThumbnail,
+  }
+}
+
+function persistableTrackList(list: Track[]) {
+  return list.map(persistableTrack).filter((track): track is Track => Boolean(track)).slice(0, MAX_PERSISTED_TRACKS)
+}
+
+function isLocalApiBase(base: string) {
+  try {
+    const hostname = new URL(base).hostname.toLowerCase()
+    const publicHostname = window.location.hostname.toLowerCase()
+    const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]'
+    const isPublicPage = publicHostname !== 'localhost' && publicHostname !== '127.0.0.1' && publicHostname !== '[::1]'
+    return isLocal && isPublicPage
+  } catch {
+    return false
   }
 }
 
@@ -189,6 +220,10 @@ function loadPersistedState(): PlayerState {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)
     if (!raw) throw new Error('empty')
+    if (raw.length > MAX_PERSISTED_STATE_BYTES) {
+      window.localStorage.removeItem(STORAGE_KEY)
+      return getDefaultState()
+    }
     const parsed = JSON.parse(raw)
 
     const nextState: PlayerState = {
@@ -209,7 +244,7 @@ function loadPersistedState(): PlayerState {
         ? parsed.recentSearches.filter((s: unknown) => typeof s === 'string' && s.trim()).slice(0, 10)
         : [],
       pendingSeek: null,
-      apiBase: normalizeApiBase(parsed?.apiBase),
+      apiBase: isLocalApiBase(normalizeApiBase(parsed?.apiBase)) ? '' : normalizeApiBase(parsed?.apiBase),
       lyricOffsets: normalizeLyricOffsets(parsed?.lyricOffsets),
     }
 
@@ -540,21 +575,30 @@ export const usePlayer = create<PlayerStore>()((set) => ({
 if (typeof window !== 'undefined') {
   usePlayer.subscribe((state) => {
     const payload = {
-      queue: state.queue,
+      queue: persistableTrackList(state.queue),
       currentIndex: state.currentIndex,
       volume: state.volume,
       playbackRate: state.playbackRate,
       shuffle: state.shuffle,
       repeat: state.repeat,
-      favorites: state.favorites,
-      history: state.history,
+      favorites: persistableTrackList(state.favorites),
+      history: persistableTrackList(state.history),
       lastQuery: state.lastQuery,
-      lastResults: state.lastResults,
+      lastResults: persistableTrackList(state.lastResults),
       recentSearches: state.recentSearches,
       apiBase: state.apiBase,
       lyricOffsets: state.lyricOffsets,
     }
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
+    try {
+      const serialized = JSON.stringify(payload)
+      if (serialized.length > MAX_PERSISTED_STATE_BYTES) {
+        payload.queue = []
+        payload.lastResults = []
+      }
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
+    } catch {
+      // Keep playback usable when browser storage is disabled or full.
+    }
   })
 }
 
