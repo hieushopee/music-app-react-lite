@@ -3,6 +3,7 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import YTMusic from 'ytmusic-api'
 import lrclibApi from 'lrclib-api'
+import pg from 'pg'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -30,9 +31,17 @@ app.use((req, res, next) => {
 const ytmusic = new YTMusic()
 const { Client: LRCLibClient, parseLocalLyrics } = lrclibApi
 const lrclib = new LRCLibClient()
+const databaseUrl = String(process.env.DATABASE_URL || '').trim()
+const database = databaseUrl
+  ? new pg.Pool({
+      connectionString: databaseUrl,
+      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
+    })
+  : null
 let initPromise = null
 let inMemoryStore = null
 let writeTimeout = null
+let databaseReadyPromise = null
 
 async function withTimeout(task, timeoutMs, fallbackValue) {
   let timer = null
@@ -66,6 +75,21 @@ async function ensureManualLyricsStore() {
   } catch {
     await fs.writeFile(manualLyricsPath, '{}', 'utf8')
   }
+}
+
+async function ensureDatabase() {
+  if (!database) return false
+  if (!databaseReadyPromise) {
+    databaseReadyPromise = database.query(`
+      CREATE TABLE IF NOT EXISTS manual_lyrics (
+        video_id TEXT PRIMARY KEY,
+        data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `)
+  }
+  await databaseReadyPromise
+  return true
 }
 
 async function readManualLyricsStore() {
@@ -103,6 +127,33 @@ function scheduleManualLyricsWrite() {
       console.error('Failed to save manual lyrics:', err)
     }
   }, 2000)
+}
+
+async function saveManualLyricsEntry(entry) {
+  if (await ensureDatabase()) {
+    await database.query(
+      `INSERT INTO manual_lyrics (video_id, data, updated_at)
+       VALUES ($1, $2::jsonb, NOW())
+       ON CONFLICT (video_id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
+      [entry.videoId, JSON.stringify(entry)]
+    )
+    return
+  }
+
+  const store = await getManualLyricsStore()
+  store[entry.videoId] = entry
+  scheduleManualLyricsWrite()
+}
+
+async function removeManualLyricsEntry(videoId) {
+  if (await ensureDatabase()) {
+    await database.query('DELETE FROM manual_lyrics WHERE video_id = $1', [videoId])
+    return
+  }
+
+  const store = await getManualLyricsStore()
+  delete store[videoId]
+  scheduleManualLyricsWrite()
 }
 
 function pickThumb(thumbnails = []) {
@@ -346,6 +397,11 @@ function normalizeManualLyricsEntry(entry) {
 async function getManualLyricsEntry(videoId) {
   const id = String(videoId || '').trim()
   if (!id) return null
+
+  if (await ensureDatabase()) {
+    const result = await database.query('SELECT data FROM manual_lyrics WHERE video_id = $1', [id])
+    return normalizeManualLyricsEntry(result.rows[0]?.data)
+  }
 
   const store = await getManualLyricsStore()
   return normalizeManualLyricsEntry(store[id])
@@ -613,9 +669,7 @@ app.post('/api/manual-lyrics', async (req, res) => {
       return res.status(400).json({ error: 'Invalid lyric data' })
     }
 
-    const store = await getManualLyricsStore()
-    store[videoId] = entry
-    scheduleManualLyricsWrite()
+    await saveManualLyricsEntry(entry)
 
     res.json({ item: entry })
   } catch {
@@ -631,11 +685,10 @@ app.delete('/api/manual-lyrics', async (req, res) => {
   }
 
   try {
-    const store = await getManualLyricsStore()
-    const existing = normalizeManualLyricsEntry(store[videoId])
+    const existing = await getManualLyricsEntry(videoId)
 
     if (!existing) {
-      delete store[videoId]
+      await removeManualLyricsEntry(videoId)
     } else if (mode === 'thumbnail') {
       const nextEntry = normalizeManualLyricsEntry({
         ...existing,
@@ -644,9 +697,9 @@ app.delete('/api/manual-lyrics', async (req, res) => {
       })
 
       if (nextEntry) {
-        store[videoId] = nextEntry
+        await saveManualLyricsEntry(nextEntry)
       } else {
-        delete store[videoId]
+        await removeManualLyricsEntry(videoId)
       }
     } else if (mode === 'lyrics') {
       const nextEntry = normalizeManualLyricsEntry({
@@ -657,15 +710,13 @@ app.delete('/api/manual-lyrics', async (req, res) => {
       })
 
       if (nextEntry) {
-        store[videoId] = nextEntry
+        await saveManualLyricsEntry(nextEntry)
       } else {
-        delete store[videoId]
+        await removeManualLyricsEntry(videoId)
       }
     } else {
-      delete store[videoId]
+      await removeManualLyricsEntry(videoId)
     }
-
-    scheduleManualLyricsWrite()
 
     res.json({ success: true })
   } catch {
