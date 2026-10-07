@@ -12,14 +12,8 @@
 		{
 			"binding": "DB",
 			"database_name": "music-app-db",
-      "database_id": "ff7495a6-222f-4741-8fdc-0af982f593d3",
-			"migrations_dir": "migrations"
-		},
-		{
-			"binding": "y",
-			"database_name": "music-app-db",
 			"database_id": "ff7495a6-222f-4741-8fdc-0af982f593d3",
-			"remote": true
+			"migrations_dir": "migrations"
 		}
 	]
 }
