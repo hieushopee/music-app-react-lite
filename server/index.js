@@ -42,6 +42,7 @@ const database = databaseUrl
 let inMemoryStore = null
 let writeTimeout = null
 let databaseReadyPromise = null
+let databaseLastError = ''
 
 async function withTimeout(task, timeoutMs, fallbackValue) {
   let timer = null
@@ -81,8 +82,16 @@ async function ensureDatabase() {
       )
     `)
   }
-  await databaseReadyPromise
-  return true
+
+  try {
+    await databaseReadyPromise
+    databaseLastError = ''
+    return true
+  } catch (error) {
+    databaseReadyPromise = null
+    databaseLastError = error instanceof Error ? error.message : 'Unknown database error'
+    throw error
+  }
 }
 
 async function readManualLyricsStore() {
@@ -586,8 +595,24 @@ function dedupeById(list) {
   return output
 }
 
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, source: 'youtube-data-api', configured: Boolean(youtubeApiKey) })
+app.get('/api/health', async (_req, res) => {
+  let databaseStatus = database ? 'connected' : 'not-configured'
+
+  if (database) {
+    try {
+      await ensureDatabase()
+    } catch {
+      databaseStatus = 'unavailable'
+    }
+  }
+
+  res.json({
+    ok: true,
+    source: 'youtube-data-api',
+    configured: Boolean(youtubeApiKey),
+    database: databaseStatus,
+    databaseError: databaseStatus === 'unavailable' ? databaseLastError : undefined,
+  })
 })
 
 app.get('/api/suggest', async (req, res) => {
@@ -722,7 +747,8 @@ app.post('/api/manual-lyrics', async (req, res) => {
     await saveManualLyricsEntry(entry)
 
     res.json({ item: entry })
-  } catch {
+  } catch (error) {
+    console.error('Manual lyric save error:', error instanceof Error ? error.message : error)
     res.status(500).json({ error: 'Manual lyric save error' })
   }
 })
@@ -769,7 +795,8 @@ app.delete('/api/manual-lyrics', async (req, res) => {
     }
 
     res.json({ success: true })
-  } catch {
+  } catch (error) {
+    console.error('Manual lyric delete error:', error instanceof Error ? error.message : error)
     res.status(500).json({ error: 'Manual lyric delete error' })
   }
 })
