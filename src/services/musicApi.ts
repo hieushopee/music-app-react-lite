@@ -406,13 +406,7 @@ function normalizeArtistProfile(item: unknown, fallbackQuery: string): ArtistPro
 export async function testApiBase(base: string) {
   const normalized = normalizeApiBase(base)
   const health = await requestJson(normalized, '/api/health')
-  const probe = await requestJson(normalized, `/api/search?q=${encodeURIComponent('test music')}`)
-
-  return {
-    ...health,
-    probe: 'search',
-    sampleCount: Array.isArray(probe?.items) ? probe.items.length : 0,
-  }
+  return health
 }
 
 export async function searchMusic(query: string, baseOverride = '') {

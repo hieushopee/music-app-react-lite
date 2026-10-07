@@ -27,17 +27,18 @@ export function SettingsPage() {
     try {
       const normalized = normalizeApiBase(draftBase)
       const result = await testApiBase(normalized)
+      if (result?.configured === false) {
+        throw new Error('YouTube API key chưa được cấu hình trên Worker.')
+      }
       actions.setApiBase(normalized)
       setDraftBase(normalized)
       setStatusType('ok')
-      setStatus(
-        `Kết nối thành công: ${result?.source || 'ytmusic'} · test search OK (${result?.sampleCount || 0} kết quả mẫu) · đang dùng ${normalized || '/api'}`
-      )
+      setStatus(`Worker và kho dữ liệu đang hoạt động · đang dùng ${normalized || '/api'}`)
     } catch (error) {
       setStatusType('error')
       setStatus(
         error instanceof Error
-          ? `Kết nối thất bại hoặc server không tìm nhạc được: ${error.message}`
+          ? `Không thể kết nối Worker: ${error.message}`
           : 'Không kiểm tra được kết nối.'
       )
     } finally {
@@ -67,11 +68,10 @@ export function SettingsPage() {
       </header>
 
       <section className="settings-card settings-card--wide">
-        <span>Kết nối backend</span>
-        <h2>Thiết lập API YouTube Music cho web React mới</h2>
+        <span>Kết nối ứng dụng</span>
+        <h2>Cloudflare Worker</h2>
         <p>
-          Để chạy local, backend mặc định là <code>http://localhost:5174</code>. Nếu bạn deploy server riêng hoặc chạy
-          trên máy khác trong LAN, điền URL vào đây rồi bấm kiểm tra.
+          Ứng dụng đang dùng Worker cùng tên miền để tìm nhạc và lưu lyrics. Chỉ nhập URL bên dưới khi bạn cần dùng một API riêng.
         </p>
 
         <label className="settings-label" htmlFor="api-base">
@@ -83,7 +83,7 @@ export function SettingsPage() {
           type="text"
           value={draftBase}
           onChange={(event) => setDraftBase(event.target.value)}
-          placeholder="http://192.168.x.x:5174"
+          placeholder="https://api.example.com"
         />
 
         <div className="settings-actions">
@@ -109,7 +109,7 @@ export function SettingsPage() {
             <strong>Biến môi trường:</strong> {configuredBase || '(không có)'}
           </p>
           <p>
-            <strong>Ghi đè local:</strong> {state.apiBase || '(không có)'}
+            <strong>Ghi đè API:</strong> {state.apiBase || '(không có)'}
           </p>
           <p>
             <strong>Đang dùng:</strong> {activeBase}
@@ -117,12 +117,12 @@ export function SettingsPage() {
         </article>
 
         <article className="settings-card">
-          <span>Cách chạy</span>
-          <h3>Quy trình local</h3>
+          <span>Triển khai</span>
+          <h3>Hạ tầng hiện tại</h3>
           <ol>
-            <li>Vào thư mục `D:\code\music-app-react-lite`.</li>
-            <li>Chạy `npm install` ở root và `npm install` trong `server`.</li>
-            <li>Chạy `npm run dev` để mở cả web và API cùng lúc.</li>
+            <li>Giao diện và API chạy trên Cloudflare Worker.</li>
+            <li>Lyrics và ảnh bìa tự chỉnh được lưu trong Cloudflare D1.</li>
+            <li>Không cần nhập URL khi dùng cấu hình mặc định.</li>
           </ol>
         </article>
 
