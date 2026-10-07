@@ -55,7 +55,6 @@ const BLOCKED_ARTIST_TERMS = [
 ]
 
 const SHORT_ARTIST_ALLOWLIST = new Set(['vu'])
-const MAX_ARTIST_LOOKUPS = 8
 
 export function ArtistRail() {
   const navigate = useNavigate()
@@ -93,7 +92,7 @@ export function ArtistRail() {
 
     async function loadArtists() {
       const profiles = await Promise.allSettled(
-        artistQueries.slice(0, MAX_ARTIST_LOOKUPS).map(async (query) => {
+        artistQueries.slice(0, 40).map(async (query) => {
           try {
             return await fetchArtistProfile(query, state.apiBase)
           } catch {
@@ -109,7 +108,7 @@ export function ArtistRail() {
           profiles
             .map((result) => (result.status === 'fulfilled' ? result.value : null))
             .filter((artist): artist is ArtistProfile => Boolean(artist))
-            .filter((artist) => isLikelyArtistName(artist.name) && Boolean(artist.thumbnail))
+            .filter((artist) => isLikelyArtistName(artist.query) && Boolean(artist.thumbnail))
         )
       )
     }

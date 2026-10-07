@@ -792,7 +792,8 @@ app.get('/api/artist', async (req, res) => {
       .map((artist, index) => ({
         normalized: {
           id: String(artist.id?.channelId || '').trim(),
-          name: String(artist.snippet?.title || query).trim(),
+          // Keep the rail label clean while using the matching channel's avatar.
+          name: query,
           thumbnail: pickYouTubeThumbnail(artist.snippet?.thumbnails),
           query,
         },
