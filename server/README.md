@@ -1,3 +1,9 @@
+# Legacy Render backend
+
+Cloudflare Worker + D1 is now the supported production deployment. Follow [CLOUDFLARE.md](../CLOUDFLARE.md) from the repository root.
+
+The instructions below only apply if you intentionally continue using the legacy Render backend.
+
 # Persistent storage
 
 Manual lyrics and manually selected covers use PostgreSQL when `DATABASE_URL` is set.
