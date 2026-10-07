@@ -1,19 +1,25 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "music-app-react-lite",
-  "main": "src/worker.ts",
-  "compatibility_date": "2026-10-07",
-  "assets": {
-    "directory": "./dist",
-    "binding": "ASSETS",
-    "not_found_handling": "single-page-application"
-  },
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "music-app-db",
-      "database_id": "00000000-0000-0000-0000-000000000000",
-      "migrations_dir": "migrations"
-    }
-  ]
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "music-app-react-lite",
+	"main": "src/worker.ts",
+	"compatibility_date": "2026-10-07",
+	"assets": {
+		"directory": "./dist",
+		"binding": "ASSETS",
+		"not_found_handling": "single-page-application"
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "music-app-db",
+      "database_id": "ff7495a6-222f-4741-8fdc-0af982f593d3",
+			"migrations_dir": "migrations"
+		},
+		{
+			"binding": "y",
+			"database_name": "music-app-db",
+			"database_id": "ff7495a6-222f-4741-8fdc-0af982f593d3",
+			"remote": true
+		}
+	]
 }
