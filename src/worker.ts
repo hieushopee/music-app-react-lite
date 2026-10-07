@@ -87,8 +87,12 @@ async function handleApiRequest(request: Request, env: Env, url: URL) {
 
     return json({ error: 'Not found' }, 404)
   } catch (error) {
-    console.error('API error:', error instanceof Error ? error.message : error)
-    return json({ error: error instanceof Error ? error.message : 'Server error' }, 500)
+    const message = error instanceof Error ? error.message : 'Server error'
+    console.error('API error:', message)
+    if (/quota|dailyLimitExceeded/i.test(message)) {
+      return json({ error: 'Đã chạm giới hạn tìm kiếm YouTube trong ngày. Vui lòng thử lại sau khi quota được đặt lại.' }, 429)
+    }
+    return json({ error: message }, 500)
   }
 }
 
@@ -292,7 +296,7 @@ async function getPlaylists(env: Env, url: URL) {
 
   const results = await requestYouTube(env, '/search', {
     part: 'snippet', q: query, type: 'playlist', maxResults: 12, relevanceLanguage: 'vi',
-  }, 60 * 60)
+  }, 24 * 60 * 60)
   const items = (results.items || []).map((item: any) => ({
     albumId: String(item.id?.playlistId || ''),
     playlistId: String(item.id?.playlistId || ''),
@@ -331,10 +335,10 @@ async function getPlaylistDetail(env: Env, playlistId: string) {
 async function searchYouTubeVideos(env: Env, query: string) {
   const results = await requestYouTube(env, '/search', {
     part: 'snippet', q: query, type: 'video', videoEmbeddable: 'true', maxResults: 20, relevanceLanguage: 'vi',
-  }, 10 * 60)
+  }, 24 * 60 * 60)
   const ids = (results.items || []).map((item: any) => item.id?.videoId).filter(Boolean)
   if (!ids.length) return []
-  const videos = await requestYouTube(env, '/videos', { part: 'snippet,contentDetails', id: ids.join(',') }, 10 * 60)
+  const videos = await requestYouTube(env, '/videos', { part: 'snippet,contentDetails', id: ids.join(',') }, 24 * 60 * 60)
   const byId = new Map((videos.items || []).map((item: any) => [item.id, item]))
   return ids.map((id: string) => byId.get(id)).filter(Boolean).map(normalizeYouTubeVideo)
 }

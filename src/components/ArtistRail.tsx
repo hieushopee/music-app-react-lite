@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { fetchArtistProfile, searchMusic, type ArtistProfile } from '../services/musicApi'
+import { searchMusic, type ArtistProfile, type Track } from '../services/musicApi'
 import { usePlayer, getCurrentTrack } from '../store/player'
 
 const ARTIST_SHORTCUTS = [
@@ -62,7 +62,6 @@ export function ArtistRail() {
   const state = usePlayer()
   const { actions } = state
   const currentTrack = getCurrentTrack(state)
-  const [artists, setArtists] = useState<ArtistProfile[]>([])
   const [loadingArtist, setLoadingArtist] = useState('')
   const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({})
   const [tooltip, setTooltip] = useState<{ name: string; y: number } | null>(null)
@@ -87,48 +86,24 @@ export function ArtistRail() {
     })
   }, [currentTrack?.artist, state.history, state.favorites, state.queue, state.lastResults])
 
-  useEffect(() => {
-    let cancelled = false
+  const artists = useMemo(() => {
+    const tracks: Track[] = [currentTrack, ...state.history, ...state.favorites, ...state.queue, ...state.lastResults]
+      .filter((track): track is Track => Boolean(track))
 
-    async function loadArtists() {
-      const profiles = await Promise.allSettled(
-        artistQueries.slice(0, 40).map(async (query) => {
-          try {
-            return await fetchArtistProfile(query, state.apiBase)
-          } catch {
-            return null
-          }
-        })
-      )
-
-      if (cancelled) return
-
-      setArtists(
-        dedupeArtistProfiles(
-          profiles
-            .map((result) => (result.status === 'fulfilled' ? result.value : null))
-            .filter((artist): artist is ArtistProfile => Boolean(artist))
-            .filter((artist) => isLikelyArtistName(artist.query) && Boolean(artist.thumbnail))
-        )
-      )
-    }
-
-    loadArtists()
-
-    return () => {
-      cancelled = true
-    }
-  }, [artistQueries, state.apiBase])
+    return artistQueries.map((query) => ({
+      id: normalizeArtistName(query),
+      name: query,
+      query,
+      thumbnail: findArtistThumbnail(query, tracks),
+    }))
+  }, [artistQueries, currentTrack, state.history, state.favorites, state.queue, state.lastResults])
 
   const activeQuery = useMemo(() => normalizeArtistName(state.lastQuery), [state.lastQuery])
   const currentArtistKeys = useMemo(
     () => collectArtistQueries([currentTrack?.artist]).map(normalizeArtistName),
     [currentTrack?.artist]
   )
-  const visibleArtists = useMemo(
-    () => artists.filter((artist) => artist.thumbnail && !brokenImages[artist.id]),
-    [artists, brokenImages]
-  )
+  const visibleArtists = artists
 
   async function handleArtistSelect(artist: ArtistProfile) {
     setLoadingArtist(artist.query)
@@ -170,18 +145,22 @@ export function ArtistRail() {
               onMouseLeave={() => setTooltip(null)}
             >
               <span className="artist-rail__avatar">
-                <img
-                  src={artist.thumbnail}
-                  alt={artist.name}
-                  loading="lazy"
-                  referrerPolicy="no-referrer"
-                  onError={() => {
-                    setBrokenImages((previous) => ({
-                      ...previous,
-                      [artist.id]: true,
-                    }))
-                  }}
-                />
+                {artist.thumbnail && !brokenImages[artist.id] ? (
+                  <img
+                    src={artist.thumbnail}
+                    alt={artist.name}
+                    loading="lazy"
+                    referrerPolicy="no-referrer"
+                    onError={() => {
+                      setBrokenImages((previous) => ({
+                        ...previous,
+                        [artist.id]: true,
+                      }))
+                    }}
+                  />
+                ) : (
+                  <span className="artist-rail__fallback" aria-hidden="true">{artist.name.slice(0, 1).toUpperCase()}</span>
+                )}
               </span>
 
               {isCurrent ? <span className="artist-rail__pulse" aria-hidden="true" /> : null}
@@ -203,29 +182,14 @@ export function ArtistRail() {
   )
 }
 
-function dedupeArtistProfiles(list: ArtistProfile[]) {
-  const seenIds = new Set<string>()
-  const seenNames = new Set<string>()
-
-  return list.filter((artist) => {
-    const idKey = normalizeArtistName(artist.id)
-    const nameKey = normalizeArtistName(artist.name)
-    const queryKey = normalizeArtistName(artist.query)
-
-    if ((idKey && seenIds.has(idKey)) || (nameKey && seenNames.has(nameKey))) {
-      return false
-    }
-
-    if (!artist.thumbnail && queryKey && seenNames.has(queryKey)) {
-      return false
-    }
-
-    if (idKey) seenIds.add(idKey)
-    if (nameKey) seenNames.add(nameKey)
-    if (queryKey) seenNames.add(queryKey)
-
-    return true
+function findArtistThumbnail(query: string, tracks: Track[]) {
+  const artistKey = normalizeArtistName(query)
+  const track = tracks.find((item) => {
+    const trackKey = normalizeArtistName(item.artist)
+    return trackKey === artistKey || trackKey.includes(artistKey) || artistKey.includes(trackKey)
   })
+
+  return track?.thumbnail || track?.sourceThumbnail || ''
 }
 
 function collectArtistQueries(values: Array<string | null | undefined>) {
