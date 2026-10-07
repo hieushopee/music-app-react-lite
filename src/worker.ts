@@ -351,7 +351,8 @@ async function requestYouTube(env: Env, path: string, params: Record<string, str
     if (value !== undefined && String(value).trim()) search.set(key, String(value))
   }
 
-  const cache = await caches.open('youtube-data-api')
+  // Cloudflare Workers exposes its edge cache as caches.default.
+  const cache = (caches as unknown as { default: Cache }).default
   const cacheKey = new Request(`https://music-api-cache.invalid${path}?${search.toString()}`)
   const cached = await cache.match(cacheKey)
   if (cached) return cached.json()
