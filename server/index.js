@@ -1,7 +1,6 @@
 import express from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
-import YTMusic from 'ytmusic-api'
 import lrclibApi from 'lrclib-api'
 import pg from 'pg'
 import { promises as fs } from 'node:fs'
@@ -28,9 +27,11 @@ app.use((req, res, next) => {
   res.sendFile(path.join(frontendDist, 'index.html'))
 })
 
-const ytmusic = new YTMusic()
 const { Client: LRCLibClient, parseLocalLyrics } = lrclibApi
 const lrclib = new LRCLibClient()
+const youtubeApiKey = String(process.env.YOUTUBE_API_KEY || '').trim()
+const youtubeApiBase = 'https://www.googleapis.com/youtube/v3'
+const youtubeCache = new Map()
 const databaseUrl = String(process.env.DATABASE_URL || '').trim()
 const database = databaseUrl
   ? new pg.Pool({
@@ -38,7 +39,6 @@ const database = databaseUrl
       ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
     })
   : null
-let initPromise = null
 let inMemoryStore = null
 let writeTimeout = null
 let databaseReadyPromise = null
@@ -58,13 +58,6 @@ async function withTimeout(task, timeoutMs, fallbackValue) {
   } finally {
     if (timer) clearTimeout(timer)
   }
-}
-
-async function ensureYtMusic() {
-  if (!initPromise) {
-    initPromise = ytmusic.initialize({ GL: 'VN', HL: 'vi' })
-  }
-  return initPromise
 }
 
 async function ensureManualLyricsStore() {
@@ -196,6 +189,93 @@ function parseDuration(value) {
   if (parts.length === 2) return parts[0] * 60 + parts[1]
   if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2]
   return 0
+}
+
+function parseYouTubeDuration(value) {
+  const match = String(value || '').match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/i)
+  if (!match) return 0
+  return Number(match[1] || 0) * 3600 + Number(match[2] || 0) * 60 + Number(match[3] || 0)
+}
+
+function pickYouTubeThumbnail(thumbnails = {}) {
+  return String(thumbnails.maxres?.url || thumbnails.standard?.url || thumbnails.high?.url || thumbnails.medium?.url || thumbnails.default?.url || '')
+}
+
+async function requestYouTube(pathname, params, cacheMs = 10 * 60 * 1000) {
+  if (!youtubeApiKey) {
+    throw new Error('YOUTUBE_API_KEY is not configured')
+  }
+
+  const search = new URLSearchParams({ key: youtubeApiKey })
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && String(value).trim()) {
+      search.set(key, String(value))
+    }
+  }
+
+  const cacheKey = `${pathname}?${search.toString()}`
+  const cached = youtubeCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value
+  }
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 8000)
+
+  try {
+    const response = await fetch(`${youtubeApiBase}${pathname}?${search.toString()}`, { signal: controller.signal })
+    const body = await response.json()
+    if (!response.ok) {
+      throw new Error(body?.error?.message || `YouTube Data API returned ${response.status}`)
+    }
+
+    if (youtubeCache.size >= 200) {
+      youtubeCache.delete(youtubeCache.keys().next().value)
+    }
+    youtubeCache.set(cacheKey, { value: body, expiresAt: Date.now() + cacheMs })
+    return body
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function searchYouTubeVideos(query, maxResults = 20) {
+  const search = await requestYouTube('/search', {
+    part: 'snippet',
+    q: query,
+    type: 'video',
+    videoEmbeddable: 'true',
+    maxResults,
+    relevanceLanguage: 'vi',
+  })
+  const ids = (search.items || []).map((item) => item?.id?.videoId).filter(Boolean)
+  if (!ids.length) return []
+
+  const videos = await requestYouTube('/videos', {
+    part: 'snippet,contentDetails',
+    id: ids.join(','),
+  })
+  const byId = new Map((videos.items || []).map((item) => [item.id, item]))
+
+  return ids
+    .map((id) => byId.get(id))
+    .filter(Boolean)
+    .map((video) => ({
+      id: video.id,
+      title: String(video.snippet?.title || 'Unknown title'),
+      artist: String(video.snippet?.channelTitle || 'Unknown artist'),
+      album: 'YouTube',
+      duration: parseYouTubeDuration(video.contentDetails?.duration),
+      thumbnail: pickYouTubeThumbnail(video.snippet?.thumbnails),
+    }))
+}
+
+async function getYouTubeVideo(videoId) {
+  const result = await requestYouTube('/videos', {
+    part: 'snippet,contentDetails',
+    id: videoId,
+  })
+  return result.items?.[0] || null
 }
 
 function normalizeText(value) {
@@ -507,7 +587,7 @@ function dedupeById(list) {
 }
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, source: 'ytmusic' })
+  res.json({ ok: true, source: 'youtube-data-api', configured: Boolean(youtubeApiKey) })
 })
 
 app.get('/api/suggest', async (req, res) => {
@@ -516,13 +596,9 @@ app.get('/api/suggest', async (req, res) => {
     return res.status(400).json({ error: 'Missing q parameter' })
   }
 
-  try {
-    await ensureYtMusic()
-    const suggestions = await ytmusic.getSearchSuggestions(query)
-    res.json({ items: suggestions || [] })
-  } catch (error) {
-    res.status(500).json({ error: 'YT Music API suggest error' })
-  }
+  // Search suggestions are intentionally local-only to preserve YouTube API
+  // quota; selecting a result still performs a full official API search.
+  res.json({ items: [] })
 })
 
 app.get('/api/search', async (req, res) => {
@@ -532,29 +608,10 @@ app.get('/api/search', async (req, res) => {
   }
 
   try {
-    await ensureYtMusic()
-
-    const [songsResult, videosResult, mixedResult] = await Promise.allSettled([
-      ytmusic.searchSongs(query),
-      ytmusic.searchVideos(query),
-      ytmusic.search(query),
-    ])
-
-    const songs = songsResult.status === 'fulfilled' ? songsResult.value : []
-    const videos = videosResult.status === 'fulfilled' ? videosResult.value : []
-    const mixed = mixedResult.status === 'fulfilled' ? mixedResult.value : []
-
-    const merged = [...songs, ...videos, ...mixed]
-
-    const ranked = dedupeById(merged.map(normalizeSong).filter(Boolean))
-      .map((item, index) => ({ ...item, score: scoreMatch(query, item), rank: index }))
-      .sort((a, b) => b.score - a.score || a.rank - b.rank)
-      .slice(0, 30)
-      .map(({ score, rank, ...item }) => item)
-
-    res.json({ items: ranked })
-  } catch {
-    res.status(500).json({ error: 'YT Music API error' })
+    res.json({ items: await searchYouTubeVideos(query) })
+  } catch (error) {
+    console.error('YouTube search error:', error instanceof Error ? error.message : error)
+    res.status(503).json({ error: 'YouTube search is temporarily unavailable.' })
   }
 })
 
@@ -570,18 +627,13 @@ app.get('/api/context', async (req, res) => {
   }
 
   try {
-    await ensureYtMusic()
-
     const manualEntry = await getManualLyricsEntry(videoId)
-    const [baseSong, remoteLyricsRaw] = await Promise.all([
-      withTimeout(() => ytmusic.getSong(videoId), 6500, null),
-      withTimeout(() => ytmusic.getLyrics(videoId), 6500, []),
-    ])
+    const baseSong = await withTimeout(() => getYouTubeVideo(videoId), 6500, null)
 
-    const artist = String(baseSong?.artist?.name || artistHint || '').trim()
-    const title = String(baseSong?.name || titleHint || '').trim()
-    const album = String(baseSong?.album?.name || albumHint || '').trim()
-    const duration = parseDuration(baseSong?.duration || durationHint)
+    const artist = String(baseSong?.snippet?.channelTitle || artistHint || '').trim()
+    const title = String(baseSong?.snippet?.title || titleHint || '').trim()
+    const album = String(albumHint || '').trim()
+    const duration = parseYouTubeDuration(baseSong?.contentDetails?.duration) || durationHint
     const manualLyrics = manualEntry?.lyrics || []
     const manualStoredLines = manualEntry?.lines || []
     const manualDraftLines = buildManualDraftLines(manualLyrics, manualStoredLines)
@@ -614,10 +666,7 @@ app.get('/api/context', async (req, res) => {
           ? []
           : fetchedSyncedLyrics
 
-    const remoteLyrics = Array.isArray(remoteLyricsRaw)
-      ? remoteLyricsRaw.filter((line) => String(line || '').trim().length > 0)
-      : []
-    const lyrics = manualLyrics.length ? manualLyrics : remoteLyrics
+    const lyrics = manualLyrics
 
     const lyricSource = manualLyrics.length || manualSyncedLyrics.length ? 'manual' : syncedLyrics.length ? 'synced' : lyrics.length ? 'static' : 'none'
     const canManualSync = true
@@ -631,8 +680,9 @@ app.get('/api/context', async (req, res) => {
       hasManualSync: Boolean(manualLyrics.length || manualStoredLines.length),
       thumbnail: manualEntry?.thumbnail || '',
     })
-  } catch {
-    res.status(500).json({ error: 'YT Music context error' })
+  } catch (error) {
+    console.error('YouTube context error:', error instanceof Error ? error.message : error)
+    res.status(500).json({ error: 'Track context error' })
   }
 })
 
@@ -731,13 +781,22 @@ app.get('/api/artist', async (req, res) => {
   }
 
   try {
-    await ensureYtMusic()
-
-    const results = await ytmusic.searchArtists(query)
-    const ranked = (results || [])
+    const results = await requestYouTube('/search', {
+      part: 'snippet',
+      q: query,
+      type: 'channel',
+      maxResults: 5,
+      relevanceLanguage: 'vi',
+    }, 12 * 60 * 60 * 1000)
+    const ranked = (results.items || [])
       .map((artist, index) => ({
-        normalized: normalizeArtist(artist, query),
-        score: scoreArtistMatch(query, artist),
+        normalized: {
+          id: String(artist.id?.channelId || '').trim(),
+          name: String(artist.snippet?.title || query).trim(),
+          thumbnail: pickYouTubeThumbnail(artist.snippet?.thumbnails),
+          query,
+        },
+        score: scoreArtistMatch(query, { name: artist.snippet?.title }),
         rank: index,
       }))
       .filter((artist) => artist.normalized?.id && artist.normalized?.name)
@@ -751,7 +810,7 @@ app.get('/api/artist', async (req, res) => {
   } catch (error) {
     // Artist lookup only feeds optional avatar shortcuts. Do not turn a
     // temporary upstream block into a client-side error storm.
-    console.error('YT Music artist error:', error instanceof Error ? error.message : error)
+    console.error('YouTube artist error:', error instanceof Error ? error.message : error)
     res.json({ item: null })
   }
 })
@@ -763,22 +822,27 @@ app.get('/api/albums', async (req, res) => {
   }
 
   try {
-    await ensureYtMusic()
-
-    const albums = await ytmusic.searchAlbums(query)
-    const items = (albums || []).slice(0, 20).map((album) => ({
-      albumId: album.albumId || '',
-      playlistId: album.playlistId || '',
-      name: String(album.name || 'Unknown album'),
-      artist: String(album.artist?.name || 'Unknown artist'),
-      artistId: String(album.artist?.artistId || ''),
-      year: album.year || null,
-      thumbnail: upscaleThumbnail(pickThumb(album.thumbnails || [])),
-    })).filter(a => a.albumId)
+    const results = await requestYouTube('/search', {
+      part: 'snippet',
+      q: query,
+      type: 'playlist',
+      maxResults: 12,
+      relevanceLanguage: 'vi',
+    }, 60 * 60 * 1000)
+    const items = (results.items || []).map((playlist) => ({
+      albumId: String(playlist.id?.playlistId || ''),
+      playlistId: String(playlist.id?.playlistId || ''),
+      name: String(playlist.snippet?.title || 'YouTube playlist'),
+      artist: String(playlist.snippet?.channelTitle || 'YouTube'),
+      artistId: String(playlist.snippet?.channelId || ''),
+      year: playlist.snippet?.publishedAt ? Number(String(playlist.snippet.publishedAt).slice(0, 4)) : null,
+      thumbnail: pickYouTubeThumbnail(playlist.snippet?.thumbnails),
+    })).filter((item) => item.albumId)
 
     res.json({ items })
-  } catch {
-    res.status(500).json({ error: 'YT Music albums error' })
+  } catch (error) {
+    console.error('YouTube playlist error:', error instanceof Error ? error.message : error)
+    res.status(503).json({ error: 'YouTube playlists are temporarily unavailable.' })
   }
 })
 
@@ -789,29 +853,49 @@ app.get('/api/album/:id', async (req, res) => {
   }
 
   try {
-    await ensureYtMusic()
-
-    const album = await ytmusic.getAlbum(albumId)
-    if (!album) {
+    const [playlistResult, playlistItemsResult] = await Promise.all([
+      requestYouTube('/playlists', { part: 'snippet', id: albumId }, 60 * 60 * 1000),
+      requestYouTube('/playlistItems', { part: 'snippet,contentDetails', playlistId: albumId, maxResults: 50 }, 60 * 60 * 1000),
+    ])
+    const playlist = playlistResult.items?.[0]
+    if (!playlist) {
       return res.status(404).json({ error: 'Album not found' })
     }
 
-    const songs = (album.songs || []).map(normalizeSong).filter(Boolean)
+    const videoIds = (playlistItemsResult.items || [])
+      .map((item) => item.contentDetails?.videoId || item.snippet?.resourceId?.videoId)
+      .filter(Boolean)
+    const videos = videoIds.length
+      ? await requestYouTube('/videos', { part: 'snippet,contentDetails', id: videoIds.join(',') }, 60 * 60 * 1000)
+      : { items: [] }
+    const byId = new Map((videos.items || []).map((video) => [video.id, video]))
+    const songs = videoIds
+      .map((videoId) => byId.get(videoId))
+      .filter(Boolean)
+      .map((video) => ({
+        id: video.id,
+        title: String(video.snippet?.title || 'Unknown title'),
+        artist: String(video.snippet?.channelTitle || 'Unknown artist'),
+        album: String(playlist.snippet?.title || 'YouTube playlist'),
+        duration: parseYouTubeDuration(video.contentDetails?.duration),
+        thumbnail: pickYouTubeThumbnail(video.snippet?.thumbnails),
+      }))
 
     res.json({
-      name: String(album.name || 'Unknown album'),
-      artist: String(album.artist?.name || 'Unknown artist'),
-      year: album.year || null,
-      thumbnail: upscaleThumbnail(pickThumb(album.thumbnails || [])),
+      name: String(playlist.snippet?.title || 'YouTube playlist'),
+      artist: String(playlist.snippet?.channelTitle || 'YouTube'),
+      year: playlist.snippet?.publishedAt ? Number(String(playlist.snippet.publishedAt).slice(0, 4)) : null,
+      thumbnail: pickYouTubeThumbnail(playlist.snippet?.thumbnails),
       songs,
     })
-  } catch {
-    res.status(500).json({ error: 'YT Music album error' })
+  } catch (error) {
+    console.error('YouTube playlist detail error:', error instanceof Error ? error.message : error)
+    res.status(503).json({ error: 'YouTube playlist is temporarily unavailable.' })
   }
 })
 
 app.listen(port, '0.0.0.0', () => {
-  console.log(`YT Music API listening on http://0.0.0.0:${port}`)
+  console.log(`Music API listening on http://0.0.0.0:${port}`)
 })
 
 // Prevent unhandled errors from crashing the process
