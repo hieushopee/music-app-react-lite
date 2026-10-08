@@ -792,20 +792,32 @@ async function fetchTimedLyrics({
   if (!cleanTitle || !cleanArtist) return { lyrics: [], syncedLyrics: [] }
 
   let plainFallback: string[] = []
-  const exactParams = buildLyricsParams(cleanTitle, cleanArtist, album, duration)
+  const exactAttempts = [
+    buildLyricsParams(cleanTitle, cleanArtist, album, duration),
+    buildLyricsParams(cleanTitle, cleanArtist, '', duration),
+    buildLyricsParams(cleanTitle, cleanArtist, '', 0),
+  ]
+  const seenExactAttempts = new Set<string>()
 
-  try {
-    const exact = await requestLrclibJson(
-      `${LRCLIB_API_BASE}/get?${exactParams.toString()}`
-    )
-    if (exact) {
-      const syncedLyrics = parseLrc(exact.syncedLyrics)
-      const lyrics = parsePlainLyrics(exact.plainLyrics)
-      if (syncedLyrics.length) return { lyrics, syncedLyrics }
-      plainFallback = lyrics
+  for (const [index, params] of exactAttempts.entries()) {
+    const query = params.toString()
+    if (seenExactAttempts.has(query)) continue
+    seenExactAttempts.add(query)
+
+    try {
+      const exact = await requestLrclibJson(`${LRCLIB_API_BASE}/get?${query}`)
+      if (exact) {
+        const syncedLyrics = parseLrc(exact.syncedLyrics)
+        const lyrics = parsePlainLyrics(exact.plainLyrics)
+        if (syncedLyrics.length) return { lyrics, syncedLyrics }
+        if (!plainFallback.length) plainFallback = lyrics
+      }
+    } catch (error) {
+      console.warn(
+        `LRCLIB exact lyric lookup failed (${index + 1}/${exactAttempts.length}):`,
+        error instanceof Error ? error.message : error
+      )
     }
-  } catch (error) {
-    console.warn('LRCLIB exact lyric lookup failed:', error instanceof Error ? error.message : error)
   }
 
   const artistCandidates = [...new Set([cleanArtist, cleanLyricsArtist(artistHint)].filter(Boolean))]
