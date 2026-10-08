@@ -1,7 +1,7 @@
 import { startTransition, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Track, Album } from '../services/musicApi'
-import { searchMusic, searchAlbums, getSearchSuggestions } from '../services/musicApi'
+import { searchMusic, searchAlbums, getSearchSuggestions, testApiBase } from '../services/musicApi'
 import { SectionBlock } from '../components/SectionBlock'
 import { AlbumCard } from '../components/AlbumCard'
 import { formatDuration } from '../lib/format'
@@ -80,6 +80,8 @@ export function HomePage() {
   const [isSearching, setIsSearching] = useState(false)
   const [searchError, setSearchError] = useState('')
   const [suggestions, setSuggestions] = useState<string[]>([])
+  const [apiConfigured, setApiConfigured] = useState<boolean | null>(null)
+  const [apiCheckError, setApiCheckError] = useState('')
   const [sections, setSections] = useState<Record<string, Track[]>>({})
   const [loadingSections, setLoadingSections] = useState(true)
   const [sectionsError, setSectionsError] = useState('')
@@ -93,24 +95,55 @@ export function HomePage() {
     setQuery(state.lastQuery)
   }, [state.lastQuery])
 
+  useEffect(() => {
+    let cancelled = false
+
+    async function checkApiConfiguration() {
+      setApiConfigured(null)
+      setApiCheckError('')
+      try {
+        const health = await testApiBase(state.apiBase)
+        if (cancelled) return
+        setApiConfigured(Boolean(health?.configured))
+      } catch (error) {
+        if (cancelled) return
+        setApiConfigured(false)
+        setApiCheckError(error instanceof Error ? error.message : 'Không kiểm tra được cấu hình API.')
+      }
+    }
+
+    void checkApiConfiguration()
+    return () => { cancelled = true }
+  }, [state.apiBase])
+
   // Debounced suggestions
   useEffect(() => {
+    let cancelled = false
     const trimmed = query.trim()
     if (!trimmed) {
       setSuggestions([])
       return
     }
+    setSuggestions([])
     const timer = setTimeout(async () => {
       const results = await getSearchSuggestions(trimmed, state.apiBase)
-      setSuggestions(results)
+      if (!cancelled) setSuggestions(results)
     }, 300)
-    return () => clearTimeout(timer)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
   }, [query, state.apiBase])
 
   useEffect(() => {
     let cancelled = false
 
     async function loadAlbums() {
+      if (apiConfigured !== true) {
+        setAlbums([])
+        setLoadingAlbums(false)
+        return
+      }
       setLoadingAlbums(true)
       try {
         const allAlbums: Album[] = []
@@ -144,12 +177,24 @@ export function HomePage() {
 
     loadAlbums()
     return () => { cancelled = true }
-  }, [state.apiBase])
+  }, [apiConfigured, state.apiBase])
 
   useEffect(() => {
     let cancelled = false
 
     async function loadSections() {
+      if (apiConfigured !== true) {
+        setSections({})
+        setSectionsError(
+          apiConfigured === false
+            ? apiCheckError
+              ? `Không kiểm tra được API: ${apiCheckError}`
+              : 'Thiếu YOUTUBE_API_KEY. Thêm key vào .dev.vars ở thư mục gốc rồi khởi động lại npm run dev.'
+            : ''
+        )
+        setLoadingSections(false)
+        return
+      }
       setLoadingSections(true)
       setSectionsError('')
 
@@ -186,9 +231,10 @@ export function HomePage() {
     return () => {
       cancelled = true
     }
-  }, [state.apiBase])
+  }, [apiCheckError, apiConfigured, state.apiBase])
 
   async function refreshAlbums() {
+    if (apiConfigured !== true) return
     setLoadingAlbums(true)
     try {
       const allAlbums: Album[] = []
@@ -214,6 +260,7 @@ export function HomePage() {
   }
 
   async function refreshSection(sectionKey: string) {
+    if (apiConfigured !== true) return
     setSections((prev) => ({ ...prev, [sectionKey]: [] }))
     try {
       const section = sectionQueries.find(s => s.key === sectionKey)
@@ -229,6 +276,18 @@ export function HomePage() {
   async function handleSearch(submittedQuery?: string) {
     const keyword = String(submittedQuery ?? query).trim()
     if (!keyword) return
+    if (apiConfigured === null) {
+      setSearchError('Đang kiểm tra cấu hình backend. Vui lòng thử lại sau giây lát.')
+      return
+    }
+    if (!apiConfigured) {
+      setSearchError(
+        apiCheckError
+          ? `Không kiểm tra được API: ${apiCheckError}`
+          : 'Thiếu YOUTUBE_API_KEY. Thêm key vào .dev.vars ở thư mục gốc rồi khởi động lại npm run dev.'
+      )
+      return
+    }
 
     setIsSearching(true)
     setSearchError('')
@@ -283,7 +342,7 @@ export function HomePage() {
               type="text"
               placeholder="Tìm bài hát, nghệ sĩ hoặc playlist..."
             />
-            <button type="submit" disabled={isSearching}>
+            <button type="submit" disabled={isSearching || apiConfigured !== true}>
               {isSearching ? 'Đang tìm...' : 'Tìm nhạc'}
             </button>
           </form>

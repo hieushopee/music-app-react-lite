@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { searchMusic, type ArtistProfile, type Track } from '../services/musicApi'
+import { fetchArtistProfile, searchMusic, type ArtistProfile, type Track } from '../services/musicApi'
 import { usePlayer, getCurrentTrack } from '../store/player'
 
 const ARTIST_SHORTCUTS = [
@@ -55,6 +55,14 @@ const BLOCKED_ARTIST_TERMS = [
 ]
 
 const SHORT_ARTIST_ALLOWLIST = new Set(['vu'])
+const ARTIST_PROFILE_CACHE_KEY = 'pulseframe-artist-profile-cache-v1'
+const ARTIST_PROFILE_CACHE_TTL = 7 * 24 * 60 * 60 * 1000
+const MAX_ARTIST_PROFILE_LOOKUPS_PER_LOAD = 6
+
+interface CachedArtistProfile {
+  expiresAt: number
+  thumbnail: string
+}
 
 export function ArtistRail() {
   const navigate = useNavigate()
@@ -64,7 +72,9 @@ export function ArtistRail() {
   const currentTrack = getCurrentTrack(state)
   const [loadingArtist, setLoadingArtist] = useState('')
   const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({})
+  const [profileThumbnails, setProfileThumbnails] = useState<Record<string, string>>({})
   const [tooltip, setTooltip] = useState<{ name: string; y: number } | null>(null)
+  const listRef = useRef<HTMLDivElement>(null)
 
   const artistQueries = useMemo(() => {
     const dynamicArtists = collectArtistQueries([
@@ -105,6 +115,74 @@ export function ArtistRail() {
   )
   const visibleArtists = artists
 
+  useEffect(() => {
+    const list = listRef.current
+    if (!list || typeof IntersectionObserver === 'undefined') return
+
+    let cancelled = false
+    let isLoading = false
+    let lookupCount = 0
+    const pendingQueries: Array<{ id: string; query: string }> = []
+    const queuedIds = new Set<string>()
+
+    async function loadNextProfile() {
+      if (isLoading || cancelled) return
+
+      const next = pendingQueries.shift()
+      if (!next) return
+      isLoading = true
+
+      try {
+        const profile = await fetchArtistProfile(next.query, state.apiBase)
+        const thumbnail = profile?.thumbnail || ''
+        saveCachedArtistProfile(next.query, thumbnail)
+        if (thumbnail && !cancelled) {
+          setProfileThumbnails((previous) => ({ ...previous, [next.id]: thumbnail }))
+        }
+      } catch {
+        // Keep the existing track-cover or initial fallback if profile lookup fails.
+      } finally {
+        isLoading = false
+        void loadNextProfile()
+      }
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue
+        const element = entry.target as HTMLElement
+        const id = element.dataset.artistId || ''
+        const query = element.dataset.artistQuery || ''
+        if (!id || !query || queuedIds.has(id)) continue
+
+        observer.unobserve(element)
+        queuedIds.add(id)
+        const cachedThumbnail = readCachedArtistProfile(query)
+        if (cachedThumbnail !== undefined) {
+          if (cachedThumbnail) {
+            setProfileThumbnails((previous) => ({ ...previous, [id]: cachedThumbnail }))
+          }
+          continue
+        }
+
+        if (lookupCount >= MAX_ARTIST_PROFILE_LOOKUPS_PER_LOAD) continue
+        lookupCount += 1
+        pendingQueries.push({ id, query })
+      }
+
+      void loadNextProfile()
+    }, { root: list, rootMargin: '80px 0px' })
+
+    for (const element of list.querySelectorAll<HTMLElement>('[data-artist-id]')) {
+      observer.observe(element)
+    }
+
+    return () => {
+      cancelled = true
+      observer.disconnect()
+    }
+  }, [artists, state.apiBase])
+
   async function handleArtistSelect(artist: ArtistProfile) {
     setLoadingArtist(artist.query)
 
@@ -124,17 +202,20 @@ export function ArtistRail() {
 
   return (
     <aside className="artist-rail" aria-label="Danh sách ca sĩ">
-      <div className="artist-rail__list">
+      <div className="artist-rail__list" ref={listRef}>
         {visibleArtists.map((artist) => {
           const artistKey = normalizeArtistName(artist.name)
           const isCurrent = currentArtistKeys.some((key) => key === artistKey || key.includes(artistKey) || artistKey.includes(key))
           const isActive = !isCurrent && activeQuery === normalizeArtistName(artist.query)
           const isLoading = loadingArtist === artist.query
+          const thumbnail = profileThumbnails[artist.id] || artist.thumbnail
 
           return (
             <button
               key={artist.id}
               type="button"
+              data-artist-id={artist.id}
+              data-artist-query={artist.query}
               className={`artist-rail__button${isActive ? ' is-active' : ''}${isCurrent ? ' is-current' : ''}${isLoading ? ' is-loading' : ''}`}
               onClick={() => handleArtistSelect(artist)}
               aria-label={`Mở nhạc của ${artist.name}`}
@@ -145,9 +226,9 @@ export function ArtistRail() {
               onMouseLeave={() => setTooltip(null)}
             >
               <span className="artist-rail__avatar">
-                {artist.thumbnail && !brokenImages[artist.id] ? (
+                {thumbnail && !brokenImages[artist.id] ? (
                   <img
-                    src={artist.thumbnail}
+                    src={thumbnail}
                     alt={artist.name}
                     loading="lazy"
                     referrerPolicy="no-referrer"
@@ -180,6 +261,34 @@ export function ArtistRail() {
       ) : null}
     </aside>
   )
+}
+
+function readCachedArtistProfile(query: string) {
+  if (typeof window === 'undefined') return undefined
+
+  try {
+    const cache = JSON.parse(window.localStorage.getItem(ARTIST_PROFILE_CACHE_KEY) || '{}') as Record<string, CachedArtistProfile>
+    const key = normalizeArtistName(query)
+    const entry = cache[key]
+    if (entry && entry.expiresAt > Date.now()) return entry.thumbnail
+  } catch {
+    return undefined
+  }
+
+  return undefined
+}
+
+function saveCachedArtistProfile(query: string, thumbnail: string) {
+  if (typeof window === 'undefined') return
+
+  try {
+    const cache = JSON.parse(window.localStorage.getItem(ARTIST_PROFILE_CACHE_KEY) || '{}') as Record<string, CachedArtistProfile>
+    const key = normalizeArtistName(query)
+    cache[key] = { expiresAt: Date.now() + ARTIST_PROFILE_CACHE_TTL, thumbnail }
+    window.localStorage.setItem(ARTIST_PROFILE_CACHE_KEY, JSON.stringify(cache))
+  } catch {
+    // Profile caching is optional; the rail still works without local storage.
+  }
 }
 
 function findArtistThumbnail(query: string, tracks: Track[]) {

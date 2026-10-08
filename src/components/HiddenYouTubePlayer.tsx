@@ -7,14 +7,16 @@ export function HiddenYouTubePlayer() {
   const playerRef = useRef<YouTubePlayerApi | null>(null)
   const loadedVideoIdRef = useRef('')
   const intervalRef = useRef<number | null>(null)
+  const seekTimeoutRef = useRef<number | null>(null)
   const pendingPlayRef = useRef(false)
+  const pendingSeekRef = useRef<{ target: number; wasPlaying: boolean; corrected: boolean } | null>(null)
   const state = usePlayer()
   const { actions } = state
   const currentTrack = getCurrentTrack(state)
 
   const syncProgress = useEffectEvent(() => {
     const player = playerRef.current
-    if (!player) return
+    if (!player || pendingSeekRef.current) return
 
     const progress = player.getCurrentTime?.() || 0
     const duration = player.getDuration?.() || 0
@@ -51,10 +53,32 @@ export function HiddenYouTubePlayer() {
     }
 
     if (event.data === YT.PlayerState.PLAYING) {
+      const pendingSeek = pendingSeekRef.current
+      const player = playerRef.current
+      if (pendingSeek && player) {
+        const actualTime = player.getCurrentTime()
+        if (!pendingSeek.corrected && Math.abs(actualTime - pendingSeek.target) > 1.25) {
+          pendingSeek.corrected = true
+          player.seekTo(pendingSeek.target, true)
+          if (pendingSeek.wasPlaying) player.playVideo()
+        } else {
+          pendingSeekRef.current = null
+          if (seekTimeoutRef.current !== null) {
+            window.clearTimeout(seekTimeoutRef.current)
+            seekTimeoutRef.current = null
+          }
+        }
+      }
       actions.setPlaying(true)
     }
 
     if (event.data === YT.PlayerState.PAUSED) {
+      if (pendingSeekRef.current?.wasPlaying) return
+      pendingSeekRef.current = null
+      if (seekTimeoutRef.current !== null) {
+        window.clearTimeout(seekTimeoutRef.current)
+        seekTimeoutRef.current = null
+      }
       actions.setPlaying(false)
     }
 
@@ -133,6 +157,9 @@ export function HiddenYouTubePlayer() {
       if (intervalRef.current) {
         window.clearInterval(intervalRef.current)
       }
+      if (seekTimeoutRef.current !== null) {
+        window.clearTimeout(seekTimeoutRef.current)
+      }
 
       playerRef.current?.destroy()
       playerRef.current = null
@@ -189,8 +216,21 @@ export function HiddenYouTubePlayer() {
     const player = playerRef.current
     if (!player || state.pendingSeek === null) return
 
+    pendingSeekRef.current = {
+      target: state.pendingSeek,
+      wasPlaying: state.isPlaying,
+      corrected: false,
+    }
     player.seekTo(state.pendingSeek, true)
     actions.acknowledgeSeek()
+
+    if (seekTimeoutRef.current !== null) {
+      window.clearTimeout(seekTimeoutRef.current)
+    }
+    seekTimeoutRef.current = window.setTimeout(() => {
+      pendingSeekRef.current = null
+      seekTimeoutRef.current = null
+    }, 10000)
   }, [state.pendingSeek])
 
   return (
